@@ -597,6 +597,7 @@ class OverlayApp:
         last_hash = None
         last_my_hash = None
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
+        items_saved = False  # アイテム保存済みフラグ
 
         while self.running:
             try:
@@ -611,12 +612,13 @@ class OverlayApp:
                     # 選出前 vs 対戦準備中を判定
                     n_selected = count_selected_panels(frame)
 
-                    if n_selected <= 1:
-                        # 選出前画面 → アイテムアイコンを保存
+                    if n_selected <= 1 and not items_saved:
+                        # 選出前画面 → アイテムアイコンを保存 (1回のみ)
                         self.root.after(0, self.status_var.set, "選出前画面 (アイテム取得)")
                         items = extract_item_icons(frame)
                         if any(it is not None for it in items):
                             saved_item_icons = items
+                            items_saved = True
                             self._log(f"アイテムアイコン保存: {sum(1 for it in items if it is not None)}体分")
                     else:
                         # 対戦準備中画面 → 相手+自分の切り出し
@@ -646,6 +648,8 @@ class OverlayApp:
                                 self._log(f"自分選出更新: {my_strip.shape[1]}x{my_strip.shape[0]}")
                             self.root.after(0, self._update_my_preview, my_strip)
                 else:
+                    # team_preview以外 → 次の対戦に備えてアイテム保存フラグをリセット
+                    items_saved = False
                     s = f"{key}({score:.2f})" if key else "待機中"
                     self.root.after(0, self.status_var.set, s)
 
