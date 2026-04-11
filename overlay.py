@@ -380,7 +380,7 @@ class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("OBS Pokemon Champions Overlay v1.1.0")
-        self.root.geometry("620x480")
+        self.root.geometry("680x560")
         self.root.resizable(True, True)
 
         self.running = False
@@ -458,10 +458,22 @@ class OverlayApp:
                   font=("", 11, "bold")).pack(side="left", padx=12)
 
         # === プレビュー ===
-        preview = ttk.LabelFrame(self.root, text="相手チーム (最新)", padding=4)
+        preview = ttk.LabelFrame(self.root, text="プレビュー", padding=4)
         preview.pack(fill="x", padx=8, pady=4)
-        self.preview_label = ttk.Label(preview, text="選出画面待ち...", anchor="center")
+        preview_inner = ttk.Frame(preview)
+        preview_inner.pack()
+        # 相手チーム (横一列)
+        opp_frame = ttk.Frame(preview_inner)
+        opp_frame.pack(side="left", padx=(0, 8))
+        ttk.Label(opp_frame, text="相手チーム", font=("", 8)).pack()
+        self.preview_label = ttk.Label(opp_frame, text="待機中...", anchor="center")
         self.preview_label.pack()
+        # 自分選出 (タテ一列)
+        my_frame = ttk.Frame(preview_inner)
+        my_frame.pack(side="left")
+        ttk.Label(my_frame, text="自分選出", font=("", 8)).pack()
+        self.my_preview_label = ttk.Label(my_frame, text="待機中...", anchor="center")
+        self.my_preview_label.pack()
 
         # === ログ ===
         log_frame = ttk.LabelFrame(self.root, text="ログ", padding=4)
@@ -632,6 +644,7 @@ class OverlayApp:
                                 cv2.imwrite(str(my_img_out), my_strip)
                                 last_my_hash = mh
                                 self._log(f"自分選出更新: {my_strip.shape[1]}x{my_strip.shape[0]}")
+                            self.root.after(0, self._update_my_preview, my_strip)
                 else:
                     s = f"{key}({score:.2f})" if key else "待機中"
                     self.root.after(0, self.status_var.set, s)
@@ -647,13 +660,12 @@ class OverlayApp:
             pass
 
     def _update_preview(self, strip_bgr):
-        """切り出し結果をGUIにプレビュー表示"""
+        """相手チーム切り出し結果をGUIにプレビュー表示"""
         try:
             from PIL import Image as PILImage, ImageTk
             rgb = cv2.cvtColor(strip_bgr, cv2.COLOR_BGR2RGB)
             pil = PILImage.fromarray(rgb)
-            # GUI幅に合わせてリサイズ
-            max_w = 580
+            max_w = 460
             if pil.width > max_w:
                 ratio = max_w / pil.width
                 pil = pil.resize((max_w, int(pil.height * ratio)))
@@ -661,7 +673,23 @@ class OverlayApp:
             self.preview_label.configure(image=tk_img, text="")
             self.preview_label._tk_img = tk_img
         except ImportError:
-            self.preview_label.configure(text="(Pillow未インストール: プレビュー不可)")
+            self.preview_label.configure(text="(Pillow未インストール)")
+
+    def _update_my_preview(self, strip_bgr):
+        """自分選出切り出し結果をGUIにプレビュー表示"""
+        try:
+            from PIL import Image as PILImage, ImageTk
+            rgb = cv2.cvtColor(strip_bgr, cv2.COLOR_BGR2RGB)
+            pil = PILImage.fromarray(rgb)
+            max_h = 150
+            if pil.height > max_h:
+                ratio = max_h / pil.height
+                pil = pil.resize((int(pil.width * ratio), max_h))
+            tk_img = ImageTk.PhotoImage(pil)
+            self.my_preview_label.configure(image=tk_img, text="")
+            self.my_preview_label._tk_img = tk_img
+        except ImportError:
+            self.my_preview_label.configure(text="(Pillow未インストール)")
 
     def _on_close(self):
         self.running = False
