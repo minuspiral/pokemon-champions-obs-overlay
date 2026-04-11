@@ -200,7 +200,7 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
 
 
 def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
-    """相手6体をタテ一列に連結した画像を返す (横一列版と同じアイコン)。"""
+    """相手6体をタテ一列に連結した画像を返す (左右反転して配信画面の左側配置向け)。"""
     if frame is None:
         return None
     h, w = frame.shape[:2]
@@ -214,6 +214,8 @@ def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_S
             return None
         roi = frame[y0:y1, x0:x1]
         resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
+        # 左右反転 (ゲーム内の向きに合わせる)
+        resized = cv2.flip(resized, 1)
 
         ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
         ty1 = ty0 + int(h * TYPE_Y_H)
@@ -225,10 +227,10 @@ def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_S
                                      (type_size, type_size), interpolation=cv2.INTER_AREA)
                 type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
                                      (type_size, type_size), interpolation=cv2.INTER_AREA)
-                bx = icon_size - type_size * 2
+                # 反転後なので左下に配置
                 by = icon_size - type_size
-                resized[by:by + type_size, bx:bx + type_size] = type_l
-                resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
+                resized[by:by + type_size, 0:type_size] = type_l
+                resized[by:by + type_size, type_size:type_size * 2] = type_r
 
         icons.append(resized)
 
@@ -345,25 +347,16 @@ def detect_selection_order(frame):
     return results
 
 
-def extract_my_selection_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE,
-                               item_icons=None):
-    """対戦準備中画面から自分の選出済みポケモンを切り出し、タテ一列に連結した画像を返す。
-
-    番号(1/2/3)をテンプレートマッチングで判定し、番号順にソート。
-    item_icons が渡された場合、対応するアイテムアイコンを右下に重ねる。
-
-    Returns: numpy array ((icon_size*N + sep*(N-1)) x icon_size, 3ch BGR) or None
-    """
+def _build_my_selection_icons(frame, icon_size=ICON_SIZE, item_icons=None):
+    """自分の選出済みポケモンのアイコンリストを返す (番号順ソート済み)。"""
     if frame is None:
-        return None
+        return []
     h, w = frame.shape[:2]
-
-    # 番号順で選出パネルを取得
     ordered = detect_selection_order(frame)
     if not ordered:
-        return None
+        return []
 
-    selected_icons = []
+    icons = []
     for slot_idx, order_num, score in ordered:
         y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * slot_idx)))
         y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * slot_idx + PANEL_Y_H)))
@@ -376,25 +369,40 @@ def extract_my_selection_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE,
 
         # アイテムアイコンを左下に大きめに重ねる
         if item_icons and slot_idx < len(item_icons) and item_icons[slot_idx] is not None:
-            item_sz = icon_size // 3  # アイコンサイズの1/3
+            item_sz = icon_size // 3
             item = cv2.resize(item_icons[slot_idx], (item_sz, item_sz),
                               interpolation=cv2.INTER_AREA)
             by = icon_size - item_sz
             resized[by:by + item_sz, 0:item_sz] = item
 
-        selected_icons.append(resized)
+        icons.append(resized)
+    return icons
 
-    if not selected_icons:
+
+def extract_my_selection_strip(frame, icon_size=ICON_SIZE, item_icons=None):
+    """自分選出をタテ一列に連結。"""
+    icons = _build_my_selection_icons(frame, icon_size, item_icons)
+    if not icons:
         return None
-
-    # セパレータ(白2px)を挟んでタテ連結
     parts = []
-    for i, icon in enumerate(selected_icons):
+    for i, icon in enumerate(icons):
         parts.append(icon)
-        if i < len(selected_icons) - 1:
-            sep = np.ones((SEP_WIDTH, icon_size, 3), dtype=np.uint8) * 255
-            parts.append(sep)
+        if i < len(icons) - 1:
+            parts.append(np.ones((SEP_WIDTH, icon_size, 3), dtype=np.uint8) * 255)
     return np.vstack(parts)
+
+
+def extract_my_selection_strip_horizontal(frame, icon_size=ICON_SIZE, item_icons=None):
+    """自分選出を横一列に連結。"""
+    icons = _build_my_selection_icons(frame, icon_size, item_icons)
+    if not icons:
+        return None
+    parts = []
+    for i, icon in enumerate(icons):
+        parts.append(icon)
+        if i < len(icons) - 1:
+            parts.append(np.ones((icon_size, SEP_WIDTH, 3), dtype=np.uint8) * 255)
+    return np.hstack(parts)
 
 
 # ─────────────────── OBS WebSocket ───────────────────
@@ -643,9 +651,11 @@ class OverlayApp:
         img_out = out_dir / "opponent_team.png"
         img_out_v = out_dir / "opponent_team_vertical.png"
         my_img_out = out_dir / "my_selection.png"
+        my_img_out_h = out_dir / "my_selection_horizontal.png"
         last_hash = None
         last_hash_v = None
         last_my_hash = None
+        last_my_hash_h = None
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
         items_saved = False  # アイテム保存済みフラグ
 
@@ -705,8 +715,19 @@ class OverlayApp:
                                 my_img_out.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(my_img_out), my_strip)
                                 last_my_hash = mh
-                                self._log(f"自分選出更新: {my_strip.shape[1]}x{my_strip.shape[0]}")
-                            self.root.after(0, self._update_my_preview, my_strip)
+                                self._log(f"自分選出更新(縦): {my_strip.shape[1]}x{my_strip.shape[0]}")
+                                self.root.after(0, self._update_my_preview, my_strip)
+
+                        # 自分選出 横一列
+                        my_strip_h = extract_my_selection_strip_horizontal(
+                            frame, item_icons=saved_item_icons
+                        )
+                        if my_strip_h is not None:
+                            mhh = hash(my_strip_h.tobytes()[:1024])
+                            if mhh != last_my_hash_h:
+                                my_img_out_h.parent.mkdir(parents=True, exist_ok=True)
+                                cv2.imwrite(str(my_img_out_h), my_strip_h)
+                                last_my_hash_h = mhh
                 else:
                     # team_preview以外 → 次の対戦に備えてアイテム保存フラグをリセット
                     items_saved = False
