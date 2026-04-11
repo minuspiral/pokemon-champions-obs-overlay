@@ -430,7 +430,7 @@ class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("OBS Pokemon Champions Overlay v1.1.0")
-        self.root.geometry("720x580")
+        self.root.geometry("780x580")
         self.root.resizable(True, True)
 
         self.running = False
@@ -526,10 +526,16 @@ class OverlayApp:
         self.opp_v_preview_label.pack()
         # 自分選出 (タテ一列)
         my_frame = ttk.Frame(preview_inner)
-        my_frame.pack(side="left")
-        ttk.Label(my_frame, text="自分選出", font=("", 8)).pack()
+        my_frame.pack(side="left", padx=(0, 8))
+        ttk.Label(my_frame, text="自分(縦)", font=("", 8)).pack()
         self.my_preview_label = ttk.Label(my_frame, text="待機中...", anchor="center")
         self.my_preview_label.pack()
+        # 自分選出 (横一列)
+        my_h_frame = ttk.Frame(preview_inner)
+        my_h_frame.pack(side="left")
+        ttk.Label(my_h_frame, text="自分(横)", font=("", 8)).pack()
+        self.my_h_preview_label = ttk.Label(my_h_frame, text="待機中...", anchor="center")
+        self.my_h_preview_label.pack()
 
         # === ログ ===
         log_frame = ttk.LabelFrame(self.root, text="ログ", padding=4)
@@ -728,6 +734,7 @@ class OverlayApp:
                                 my_img_out_h.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(my_img_out_h), my_strip_h)
                                 last_my_hash_h = mhh
+                                self.root.after(0, self._update_my_h_preview, my_strip_h)
                 else:
                     # team_preview以外 → 次の対戦に備えてアイテム保存フラグをリセット
                     items_saved = False
@@ -791,6 +798,22 @@ class OverlayApp:
             self.my_preview_label._tk_img = tk_img
         except ImportError:
             self.my_preview_label.configure(text="(Pillow未インストール)")
+
+    def _update_my_h_preview(self, strip_bgr):
+        """自分選出横一列をGUIにプレビュー表示"""
+        try:
+            from PIL import Image as PILImage, ImageTk
+            rgb = cv2.cvtColor(strip_bgr, cv2.COLOR_BGR2RGB)
+            pil = PILImage.fromarray(rgb)
+            max_w = 150
+            if pil.width > max_w:
+                ratio = max_w / pil.width
+                pil = pil.resize((max_w, int(pil.height * ratio)))
+            tk_img = ImageTk.PhotoImage(pil)
+            self.my_h_preview_label.configure(image=tk_img, text="")
+            self.my_h_preview_label._tk_img = tk_img
+        except ImportError:
+            self.my_h_preview_label.configure(text="(Pillow未インストール)")
 
     def _on_close(self):
         self.running = False
