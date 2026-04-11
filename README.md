@@ -1,8 +1,13 @@
 # Pokemon Champions OBS Overlay
 
 Pokemon Champions の対戦配信用オーバーレイツールです。  
-OBS の映像キャプチャデバイスから**選出画面を自動検出**し、相手パーティ6体のアイコンを切り出して横一列のPNG画像として出力します。  
+OBS の映像キャプチャデバイスから**選出画面を自動検出**し、相手パーティ6体のアイコンを切り出して**横一列**のPNG画像として出力します。  
 OBS の「画像ソース」で読み込めば、配信画面に相手チームをオーバーレイ表示できます。
+
+### 特徴
+- **横一列レイアウト** — 画面の上部・下部にバー形式でコンパクトに配置可能。右側のスペースが空くのでチャット欄やコメント欄を横に並べられます
+- **OBS WebSocket対応** — どのキャプチャデバイスでも動作。OBSのソースを直接指定
+- **ワンクリック起動** — exe版はPython環境不要、ダブルクリックで起動
 
 ![概要図](https://img.shields.io/badge/OBS-WebSocket-blue) ![Python](https://img.shields.io/badge/Python-3.10+-green) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
