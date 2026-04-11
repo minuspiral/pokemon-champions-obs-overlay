@@ -1,0 +1,17 @@
+# 出力 (OBS読み取り用)
+output/
+
+# ビルド成果物
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
