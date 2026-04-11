@@ -214,8 +214,6 @@ def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_S
             return None
         roi = frame[y0:y1, x0:x1]
         resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
-        # 左右反転 (ゲーム内の向きに合わせる)
-        resized = cv2.flip(resized, 1)
 
         ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
         ty1 = ty0 + int(h * TYPE_Y_H)
@@ -227,10 +225,10 @@ def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_S
                                      (type_size, type_size), interpolation=cv2.INTER_AREA)
                 type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
                                      (type_size, type_size), interpolation=cv2.INTER_AREA)
-                # 反転後なので左下に配置
+                bx = icon_size - type_size * 2
                 by = icon_size - type_size
-                resized[by:by + type_size, 0:type_size] = type_l
-                resized[by:by + type_size, type_size:type_size * 2] = type_r
+                resized[by:by + type_size, bx:bx + type_size] = type_l
+                resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
 
         icons.append(resized)
 
