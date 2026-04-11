@@ -33,19 +33,28 @@ OUTPUT_DIR = EXE_DIR / "output"
 
 # ─────────────────── 定数 ───────────────────
 # 相手スプライト ROI (prep layout, 1920x1080 基準)
-OPP_Y_FIRST = 0.1528
+OPP_Y_FIRST = 0.1510
 OPP_Y_STEP = 0.1167
-OPP_Y_H = 0.0926
+OPP_Y_H = 0.0950
 OPP_X_START = 0.7240
 OPP_X_END = 0.7864
+
+# タイプアイコン ROI (prep layout, スプライトの右隣)
+TYPE_Y_OFFSET = 0.0105
+TYPE_Y_H = 0.0380
+TYPE_LEFT_X0 = 0.7935
+TYPE_LEFT_X1 = 0.8100
+TYPE_RIGHT_X0 = 0.8190
+TYPE_RIGHT_X1 = 0.8390
 
 # 画面検出テンプレート
 SCREEN_TEMPLATES = [
     ("team_preview", "team_preview_header.png", (0.0, 0.08, 0.25, 0.75), 0.65),
 ]
 
-ICON_SIZE = 128  # 切り出し後のリサイズサイズ
-SEP_WIDTH = 2    # アイコン間のセパレータ幅
+ICON_SIZE = 128   # スプライトのリサイズサイズ
+TYPE_SIZE = 24    # タイプアイコンのリサイズサイズ
+SEP_WIDTH = 2     # パネル間セパレータ幅
 
 
 # ─────────────────── 画面検出 ───────────────────
@@ -85,8 +94,39 @@ class ScreenDetector:
 
 
 # ─────────────────── スプライト切り出し ───────────────────
-def extract_opponent_strip(frame, icon_size=ICON_SIZE):
+def _trim_red_bg(roi_bgr):
+    """赤パネル背景をトリム (上下左右の赤い帯を除去してスプライトのみにする)"""
+    hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+    red = cv2.bitwise_or(
+        cv2.inRange(hsv, (0, 40, 40), (15, 255, 255)),
+        cv2.inRange(hsv, (160, 40, 40), (180, 255, 255)),
+    )
+    rh, rw = red.shape
+    top, bot, left, right = 0, rh, 0, rw
+    for row in range(rh):
+        if cv2.countNonZero(red[row:row+1]) / rw < 0.85:
+            top = row
+            break
+    for row in range(rh - 1, -1, -1):
+        if cv2.countNonZero(red[row:row+1]) / rw < 0.85:
+            bot = row + 1
+            break
+    for col in range(rw):
+        if cv2.countNonZero(red[:, col:col+1]) / rh < 0.85:
+            left = col
+            break
+    for col in range(rw - 1, -1, -1):
+        if cv2.countNonZero(red[:, col:col+1]) / rh < 0.85:
+            right = col + 1
+            break
+    if bot > top and right > left:
+        return roi_bgr[top:bot, left:right]
+    return roi_bgr
+
+
+def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
     """選出画面から相手6体のスプライトを切り出し、横一列に連結した画像を返す。
+    各スプライトの右下にタイプアイコン2個を重ねて描画する。
 
     Returns: numpy array (icon_size x (icon_size*6 + sep*5), 3ch BGR) or None
     """
@@ -95,6 +135,7 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE):
     h, w = frame.shape[:2]
     icons = []
     for i in range(6):
+        # スプライト切り出し
         y0 = max(0, int(h * (OPP_Y_FIRST + OPP_Y_STEP * i)))
         y1 = min(h, int(h * (OPP_Y_FIRST + OPP_Y_STEP * i + OPP_Y_H)))
         x0 = max(0, int(w * OPP_X_START))
@@ -103,6 +144,25 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE):
             return None
         roi = frame[y0:y1, x0:x1]
         resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
+
+        # タイプアイコン切り出し → スプライト右下に重ねる
+        ty0 = int(h * (OPP_Y_FIRST + OPP_Y_STEP * i + TYPE_Y_OFFSET))
+        ty1 = ty0 + int(h * TYPE_Y_H)
+        if ty1 <= h:
+            lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
+            rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
+            if rx1 <= w:
+                # 各タイプを正方形 (type_size x type_size) にリサイズ (歪みなし)
+                type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
+                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
+                type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
+                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
+                # 右下端に2個横並びで配置
+                bx = icon_size - type_size * 2
+                by = icon_size - type_size
+                resized[by:by + type_size, bx:bx + type_size] = type_l
+                resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
+
         icons.append(resized)
 
     # セパレータ(白2px)を挟んで横連結
@@ -139,7 +199,7 @@ from tkinter import ttk, scrolledtext
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay")
+        self.root.title("OBS Pokemon Champions Overlay v1.0.1")
         self.root.geometry("620x480")
         self.root.resizable(True, True)
 
