@@ -32,12 +32,36 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 OUTPUT_DIR = EXE_DIR / "output"
 
 # ─────────────────── 定数 ───────────────────
-# 相手スプライト ROI (prep layout, 1920x1080 基準)
-OPP_Y_FIRST = 0.1510
-OPP_Y_STEP = 0.1167
-OPP_Y_H = 0.0950
+# パネル共通 Y座標 (prep layout, 1920x1080 基準)
+PANEL_Y_FIRST = 0.1510
+PANEL_Y_STEP = 0.1167
+PANEL_Y_H = 0.0950
+
+# 相手スプライト ROI
 OPP_X_START = 0.7240
 OPP_X_END = 0.7864
+
+# 自分スプライト ROI
+MY_X_START = 0.160
+MY_X_END = 0.250
+
+# 選出判定: パネル背景色の領域 (対戦準備中画面)
+MY_BG_X_START = 0.15
+MY_BG_X_END = 0.20
+
+# アイテムアイコン ROI (選出前画面, pokemonselection)
+# パネル上端: 0.1333, ステップ: 0.1167 (対戦準備中と同じ)
+ITEM_PANEL_Y_FIRST = 0.1333
+ITEM_PANEL_Y_STEP = 0.1167
+ITEM_Y_OFFSET = 0.083     # パネル上端からアイテムアイコン中心までのオフセット
+ITEM_X_START = 0.070
+ITEM_X_END = 0.098
+
+# 番号テンプレート ROI (対戦準備中画面, 選出番号 1/2/3)
+NUM_X_START = 0.152
+NUM_X_END = 0.188
+NUM_Y_OFFSET = 0.02
+NUM_Y_H = 0.06
 
 # タイプアイコン ROI (prep layout, スプライトの右隣)
 TYPE_Y_OFFSET = 0.0105
@@ -136,8 +160,8 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
     icons = []
     for i in range(6):
         # スプライト切り出し
-        y0 = max(0, int(h * (OPP_Y_FIRST + OPP_Y_STEP * i)))
-        y1 = min(h, int(h * (OPP_Y_FIRST + OPP_Y_STEP * i + OPP_Y_H)))
+        y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i)))
+        y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H)))
         x0 = max(0, int(w * OPP_X_START))
         x1 = min(w, int(w * OPP_X_END))
         if y1 <= y0 or x1 <= x0:
@@ -146,7 +170,7 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
         resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
 
         # タイプアイコン切り出し → スプライト右下に重ねる
-        ty0 = int(h * (OPP_Y_FIRST + OPP_Y_STEP * i + TYPE_Y_OFFSET))
+        ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
         ty1 = ty0 + int(h * TYPE_Y_H)
         if ty1 <= h:
             lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
@@ -175,6 +199,162 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
     return np.hstack(parts)
 
 
+def extract_item_icons(frame):
+    """選出前画面から6体分のアイテムアイコンを切り出す。
+
+    Returns: list of 6 BGR images (正方形) or Noneのリスト
+    """
+    if frame is None:
+        return [None] * 6
+    h, w = frame.shape[:2]
+    x0 = int(w * ITEM_X_START)
+    x1 = int(w * ITEM_X_END)
+    x_pixels = x1 - x0
+    y_half = x_pixels // 2  # 正方形にするためXの幅に合わせる
+
+    items = []
+    for i in range(6):
+        center_y = int(h * (ITEM_PANEL_Y_FIRST + ITEM_PANEL_Y_STEP * i + ITEM_Y_OFFSET))
+        y0 = center_y - y_half
+        y1 = center_y + y_half
+        if y0 < 0 or y1 > h:
+            items.append(None)
+            continue
+        items.append(frame[y0:y1, x0:x1].copy())
+    return items
+
+
+def count_selected_panels(frame):
+    """自分パネルの選出済み数をカウント (背景色 H<60, V>180 = 選出済み)。
+
+    Returns: 選出済みパネル数 (0-6)
+    """
+    if frame is None:
+        return 0
+    h, w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    count = 0
+    for i in range(6):
+        y0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i))
+        y1 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H))
+        bg_x0 = int(w * MY_BG_X_START)
+        bg_x1 = int(w * MY_BG_X_END)
+        bg = hsv[y0:y1, bg_x0:bg_x1]
+        if bg[:, :, 0].mean() < 60 and bg[:, :, 2].mean() >= 180:
+            count += 1
+    return count
+
+
+def detect_selection_order(frame):
+    """選出済みパネルの番号(1/2/3)をテンプレートマッチングで判定。
+
+    Returns: list of (slot_index, order_number, score) 番号順ソート済み
+    """
+    if frame is None:
+        return []
+    h, w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # 番号テンプレート読み込み
+    num_templates = {}
+    for n in [1, 2, 3]:
+        path = TEMPLATES_DIR / f"num_{n}.png"
+        if path.exists():
+            num_templates[n] = cv2.imread(str(path))
+
+    results = []
+    for i in range(6):
+        y0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i))
+        y1 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H))
+
+        # 選出判定
+        bg_x0 = int(w * MY_BG_X_START)
+        bg_x1 = int(w * MY_BG_X_END)
+        bg = hsv[y0:y1, bg_x0:bg_x1]
+        if bg[:, :, 0].mean() >= 60 or bg[:, :, 2].mean() < 180:
+            continue  # 未選出
+
+        if not num_templates:
+            # テンプレートなし → パネル順のまま
+            results.append((i, len(results) + 1, 0.0))
+            continue
+
+        # 番号領域切り出し
+        ny0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + NUM_Y_OFFSET))
+        ny1 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + NUM_Y_OFFSET + NUM_Y_H))
+        nx0 = int(w * NUM_X_START)
+        nx1 = int(w * NUM_X_END)
+        num_roi = frame[ny0:ny1, nx0:nx1]
+
+        # テンプレートマッチングで番号判定
+        best_num, best_score = 0, -1.0
+        for n, tmpl in num_templates.items():
+            # テンプレートをROIサイズに合わせてリサイズ
+            tmpl_r = cv2.resize(tmpl, (num_roi.shape[1], num_roi.shape[0]))
+            result = cv2.matchTemplate(num_roi, tmpl_r, cv2.TM_CCOEFF_NORMED)
+            score = float(result.max())
+            if score > best_score:
+                best_score = score
+                best_num = n
+        results.append((i, best_num, best_score))
+
+    # 番号順にソート
+    results.sort(key=lambda x: x[1])
+    return results
+
+
+def extract_my_selection_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE,
+                               item_icons=None):
+    """対戦準備中画面から自分の選出済みポケモンを切り出し、タテ一列に連結した画像を返す。
+
+    番号(1/2/3)をテンプレートマッチングで判定し、番号順にソート。
+    item_icons が渡された場合、対応するアイテムアイコンを右下に重ねる。
+
+    Returns: numpy array ((icon_size*N + sep*(N-1)) x icon_size, 3ch BGR) or None
+    """
+    if frame is None:
+        return None
+    h, w = frame.shape[:2]
+
+    # 番号順で選出パネルを取得
+    ordered = detect_selection_order(frame)
+    if not ordered:
+        return None
+
+    selected_icons = []
+    for slot_idx, order_num, score in ordered:
+        y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * slot_idx)))
+        y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * slot_idx + PANEL_Y_H)))
+        x0 = max(0, int(w * MY_X_START))
+        x1 = min(w, int(w * MY_X_END))
+        if y1 <= y0 or x1 <= x0:
+            continue
+        roi = frame[y0:y1, x0:x1]
+        resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
+
+        # アイテムアイコンを左下に大きめに重ねる
+        if item_icons and slot_idx < len(item_icons) and item_icons[slot_idx] is not None:
+            item_sz = icon_size // 3  # アイコンサイズの1/3
+            item = cv2.resize(item_icons[slot_idx], (item_sz, item_sz),
+                              interpolation=cv2.INTER_AREA)
+            by = icon_size - item_sz
+            resized[by:by + item_sz, 0:item_sz] = item
+
+        selected_icons.append(resized)
+
+    if not selected_icons:
+        return None
+
+    # セパレータ(白2px)を挟んでタテ連結
+    parts = []
+    for i, icon in enumerate(selected_icons):
+        parts.append(icon)
+        if i < len(selected_icons) - 1:
+            sep = np.ones((SEP_WIDTH, icon_size, 3), dtype=np.uint8) * 255
+            parts.append(sep)
+    return np.vstack(parts)
+
+
 # ─────────────────── OBS WebSocket ───────────────────
 def obs_grab_frame(client, source_name, width=1920, height=1080):
     """OBSソースからスクリーンショット1枚取得→OpenCV frame"""
@@ -199,7 +379,7 @@ from tkinter import ttk, scrolledtext
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.0.1")
+        self.root.title("OBS Pokemon Champions Overlay v1.1.0")
         self.root.geometry("620x480")
         self.root.resizable(True, True)
 
@@ -401,7 +581,10 @@ class OverlayApp:
         interval = conn_info["interval"]
         out_dir = Path(conn_info["output_dir"])
         img_out = out_dir / "opponent_team.png"
+        my_img_out = out_dir / "my_selection.png"
         last_hash = None
+        last_my_hash = None
+        saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
 
         while self.running:
             try:
@@ -413,18 +596,42 @@ class OverlayApp:
                 key, score = self.detector.detect(frame)
 
                 if key == "team_preview":
-                    self.root.after(0, self.status_var.set, "選出画面検出!")
-                    strip = extract_opponent_strip(frame)
-                    if strip is not None:
-                        # 変化チェック (同じ画像なら書き込みスキップ)
-                        h = hash(strip.tobytes()[:1024])
-                        if h != last_hash:
-                            img_out.parent.mkdir(parents=True, exist_ok=True)
-                            cv2.imwrite(str(img_out), strip)
-                            last_hash = h
-                            self._log(f"出力更新: {strip.shape[1]}x{strip.shape[0]}")
-                            # GUI プレビュー更新
-                            self.root.after(0, self._update_preview, strip)
+                    # 選出前 vs 対戦準備中を判定
+                    n_selected = count_selected_panels(frame)
+
+                    if n_selected <= 1:
+                        # 選出前画面 → アイテムアイコンを保存
+                        self.root.after(0, self.status_var.set, "選出前画面 (アイテム取得)")
+                        items = extract_item_icons(frame)
+                        if any(it is not None for it in items):
+                            saved_item_icons = items
+                            self._log(f"アイテムアイコン保存: {sum(1 for it in items if it is not None)}体分")
+                    else:
+                        # 対戦準備中画面 → 相手+自分の切り出し
+                        self.root.after(0, self.status_var.set, "選出画面検出!")
+
+                        # 相手チーム横一列
+                        strip = extract_opponent_strip(frame)
+                        if strip is not None:
+                            h = hash(strip.tobytes()[:1024])
+                            if h != last_hash:
+                                img_out.parent.mkdir(parents=True, exist_ok=True)
+                                cv2.imwrite(str(img_out), strip)
+                                last_hash = h
+                                self._log(f"相手チーム更新: {strip.shape[1]}x{strip.shape[0]}")
+                                self.root.after(0, self._update_preview, strip)
+
+                        # 自分選出 (番号ソート + アイテム重ね)
+                        my_strip = extract_my_selection_strip(
+                            frame, item_icons=saved_item_icons
+                        )
+                        if my_strip is not None:
+                            mh = hash(my_strip.tobytes()[:1024])
+                            if mh != last_my_hash:
+                                my_img_out.parent.mkdir(parents=True, exist_ok=True)
+                                cv2.imwrite(str(my_img_out), my_strip)
+                                last_my_hash = mh
+                                self._log(f"自分選出更新: {my_strip.shape[1]}x{my_strip.shape[0]}")
                 else:
                     s = f"{key}({score:.2f})" if key else "待機中"
                     self.root.after(0, self.status_var.set, s)
