@@ -199,6 +199,48 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
     return np.hstack(parts)
 
 
+def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
+    """相手6体をタテ一列に連結した画像を返す (横一列版と同じアイコン)。"""
+    if frame is None:
+        return None
+    h, w = frame.shape[:2]
+    icons = []
+    for i in range(6):
+        y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i)))
+        y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H)))
+        x0 = max(0, int(w * OPP_X_START))
+        x1 = min(w, int(w * OPP_X_END))
+        if y1 <= y0 or x1 <= x0:
+            return None
+        roi = frame[y0:y1, x0:x1]
+        resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
+
+        ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
+        ty1 = ty0 + int(h * TYPE_Y_H)
+        if ty1 <= h:
+            lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
+            rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
+            if rx1 <= w:
+                type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
+                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
+                type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
+                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
+                bx = icon_size - type_size * 2
+                by = icon_size - type_size
+                resized[by:by + type_size, bx:bx + type_size] = type_l
+                resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
+
+        icons.append(resized)
+
+    parts = []
+    for i, icon in enumerate(icons):
+        parts.append(icon)
+        if i < 5:
+            sep = np.ones((SEP_WIDTH, icon_size, 3), dtype=np.uint8) * 255
+            parts.append(sep)
+    return np.vstack(parts)
+
+
 def extract_item_icons(frame):
     """選出前画面から6体分のアイテムアイコンを切り出す。
 
@@ -380,7 +422,7 @@ class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("OBS Pokemon Champions Overlay v1.1.0")
-        self.root.geometry("680x560")
+        self.root.geometry("720x580")
         self.root.resizable(True, True)
 
         self.running = False
@@ -465,9 +507,15 @@ class OverlayApp:
         # 相手チーム (横一列)
         opp_frame = ttk.Frame(preview_inner)
         opp_frame.pack(side="left", padx=(0, 8))
-        ttk.Label(opp_frame, text="相手チーム", font=("", 8)).pack()
+        ttk.Label(opp_frame, text="相手(横)", font=("", 8)).pack()
         self.preview_label = ttk.Label(opp_frame, text="待機中...", anchor="center")
         self.preview_label.pack()
+        # 相手チーム (タテ一列)
+        opp_v_frame = ttk.Frame(preview_inner)
+        opp_v_frame.pack(side="left", padx=(0, 8))
+        ttk.Label(opp_v_frame, text="相手(縦)", font=("", 8)).pack()
+        self.opp_v_preview_label = ttk.Label(opp_v_frame, text="待機中...", anchor="center")
+        self.opp_v_preview_label.pack()
         # 自分選出 (タテ一列)
         my_frame = ttk.Frame(preview_inner)
         my_frame.pack(side="left")
@@ -593,8 +641,10 @@ class OverlayApp:
         interval = conn_info["interval"]
         out_dir = Path(conn_info["output_dir"])
         img_out = out_dir / "opponent_team.png"
+        img_out_v = out_dir / "opponent_team_vertical.png"
         my_img_out = out_dir / "my_selection.png"
         last_hash = None
+        last_hash_v = None
         last_my_hash = None
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
         items_saved = False  # アイテム保存済みフラグ
@@ -632,8 +682,18 @@ class OverlayApp:
                                 img_out.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(img_out), strip)
                                 last_hash = h
-                                self._log(f"相手チーム更新: {strip.shape[1]}x{strip.shape[0]}")
+                                self._log(f"相手チーム更新(横): {strip.shape[1]}x{strip.shape[0]}")
                                 self.root.after(0, self._update_preview, strip)
+
+                        # 相手チーム縦一列
+                        strip_v = extract_opponent_strip_vertical(frame)
+                        if strip_v is not None:
+                            hv = hash(strip_v.tobytes()[:1024])
+                            if hv != last_hash_v:
+                                img_out_v.parent.mkdir(parents=True, exist_ok=True)
+                                cv2.imwrite(str(img_out_v), strip_v)
+                                last_hash_v = hv
+                                self.root.after(0, self._update_opp_v_preview, strip_v)
 
                         # 自分選出 (番号ソート + アイテム重ね)
                         my_strip = extract_my_selection_strip(
@@ -678,6 +738,22 @@ class OverlayApp:
             self.preview_label._tk_img = tk_img
         except ImportError:
             self.preview_label.configure(text="(Pillow未インストール)")
+
+    def _update_opp_v_preview(self, strip_bgr):
+        """相手チーム縦一列をGUIにプレビュー表示"""
+        try:
+            from PIL import Image as PILImage, ImageTk
+            rgb = cv2.cvtColor(strip_bgr, cv2.COLOR_BGR2RGB)
+            pil = PILImage.fromarray(rgb)
+            max_h = 150
+            if pil.height > max_h:
+                ratio = max_h / pil.height
+                pil = pil.resize((int(pil.width * ratio), max_h))
+            tk_img = ImageTk.PhotoImage(pil)
+            self.opp_v_preview_label.configure(image=tk_img, text="")
+            self.opp_v_preview_label._tk_img = tk_img
+        except ImportError:
+            self.opp_v_preview_label.configure(text="(Pillow未インストール)")
 
     def _update_my_preview(self, strip_bgr):
         """自分選出切り出し結果をGUIにプレビュー表示"""
