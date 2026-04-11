@@ -75,7 +75,16 @@ class ScreenDetector:
             y0, y1 = int(h * ry0), int(h * ry1)
             x0, x1 = int(w * rx0), int(w * rx1)
             roi = frame[y0:y1, x0:x1]
-            if roi.shape[0] < tmpl.shape[0] or roi.shape[1] < tmpl.shape[1]:
+            rh, rw = roi.shape[:2]
+            th, tw = tmpl.shape[:2]
+            # 解像度が異なる場合テンプレートをROIに合わせてリサイズ
+            if rh != 0 and th != 0:
+                scale = rh / th
+                if abs(scale - 1.0) > 0.1:
+                    tmpl = cv2.resize(tmpl, (int(tw * scale), rh),
+                                      interpolation=cv2.INTER_AREA)
+                    th, tw = tmpl.shape[:2]
+            if rh < th or rw < tw:
                 continue
             result = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
             score = float(result.max())
@@ -117,18 +126,23 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE):
 
 # ─────────────────── OBS WebSocket ───────────────────
 def obs_grab_frame(client, source_name, width=1920, height=1080):
-    """OBSソースからスクリーンショット1枚取得→OpenCV frame"""
-    resp = client.get_source_screenshot(
-        name=source_name,
-        img_format="jpg",
-        width=width, height=height,
-        quality=85,
-    )
-    img_b64 = resp.image_data
-    if "," in img_b64:
-        img_b64 = img_b64.split(",", 1)[1]
-    raw = base64.b64decode(img_b64)
-    return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    """OBSソースからスクリーンショット1枚取得→OpenCV frame。失敗時None。"""
+    try:
+        resp = client.get_source_screenshot(
+            name=source_name,
+            img_format="jpg",
+            width=width, height=height,
+            quality=85,
+        )
+        img_b64 = getattr(resp, "image_data", None)
+        if not img_b64:
+            return None
+        if "," in img_b64:
+            img_b64 = img_b64.split(",", 1)[1]
+        raw = base64.b64decode(img_b64)
+        return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 # ─────────────────── GUI ───────────────────
@@ -233,7 +247,10 @@ class OverlayApp:
 
     def _log(self, msg):
         ts = time.strftime("%H:%M:%S")
-        self.log_text.after(0, self._insert_log, f"{ts} {msg}")
+        try:
+            self.log_text.after(0, self._insert_log, f"{ts} {msg}")
+        except (RuntimeError, Exception):
+            pass  # ウィンドウ破棄後のTclError防止
 
     def _insert_log(self, line):
         self.log_text.configure(state="normal")
@@ -269,7 +286,11 @@ class OverlayApp:
     # --- OBS接続 ---
     def _connect_obs(self):
         host = self.host_var.get().strip()
-        port = int(self.port_var.get().strip() or "4455")
+        try:
+            port = int(self.port_var.get().strip() or "4455")
+        except ValueError:
+            self._log("[!] ポート番号が不正です")
+            return
         pw = self.pass_var.get()
         self._log(f"OBS接続中... {host}:{port}")
         try:
@@ -298,9 +319,14 @@ class OverlayApp:
         if not source:
             self._log("[!] ソースを選択してください")
             return
+        try:
+            port = int(self.port_var.get().strip() or "4455")
+        except ValueError:
+            self._log("[!] ポート番号が不正です")
+            return
         conn_info = {
             "host": self.host_var.get().strip(),
-            "port": int(self.port_var.get().strip() or "4455"),
+            "port": port,
             "password": self.pass_var.get(),
             "source": source,
             "interval": self.interval_var.get(),
@@ -341,14 +367,23 @@ class OverlayApp:
         interval = conn_info["interval"]
         out_dir = Path(conn_info["output_dir"])
         img_out = out_dir / "opponent_team.png"
+        img_tmp = out_dir / "opponent_team.tmp.png"
         last_hash = None
+        error_count = 0
+        MAX_ERRORS = 10  # 連続エラーで自動停止
 
         while self.running:
             try:
                 frame = obs_grab_frame(client, source_name)
                 if frame is None:
+                    error_count += 1
+                    if error_count >= MAX_ERRORS:
+                        self._log(f"[!] {MAX_ERRORS}回連続取得失敗 → 停止")
+                        self.root.after(0, self._stop)
+                        break
                     time.sleep(interval)
                     continue
+                error_count = 0  # 成功したらリセット
 
                 key, score = self.detector.detect(frame)
 
@@ -356,21 +391,31 @@ class OverlayApp:
                     self.root.after(0, self.status_var.set, "選出画面検出!")
                     strip = extract_opponent_strip(frame)
                     if strip is not None:
-                        # 変化チェック (同じ画像なら書き込みスキップ)
-                        h = hash(strip.tobytes()[:1024])
+                        # 変化チェック (全体ハッシュ)
+                        h = hash(strip.tobytes())
                         if h != last_hash:
                             img_out.parent.mkdir(parents=True, exist_ok=True)
-                            cv2.imwrite(str(img_out), strip)
+                            # アトミック書き込み (tmp→rename でOBS読取中の破損防止)
+                            cv2.imwrite(str(img_tmp), strip)
+                            try:
+                                img_tmp.replace(img_out)
+                            except OSError:
+                                # replace失敗時は直接書き込み
+                                cv2.imwrite(str(img_out), strip)
                             last_hash = h
                             self._log(f"出力更新: {strip.shape[1]}x{strip.shape[0]}")
-                            # GUI プレビュー更新
                             self.root.after(0, self._update_preview, strip)
                 else:
                     s = f"{key}({score:.2f})" if key else "待機中"
                     self.root.after(0, self.status_var.set, s)
 
             except Exception as e:
+                error_count += 1
                 self._log(f"エラー: {e}")
+                if error_count >= MAX_ERRORS:
+                    self._log(f"[!] 連続エラー{MAX_ERRORS}回 → 停止")
+                    self.root.after(0, self._stop)
+                    break
 
             time.sleep(interval)
 
