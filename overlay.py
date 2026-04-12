@@ -21,9 +21,10 @@ from pathlib import Path
 log = logging.getLogger("overlay")
 
 # ─────────────────── リソースパス ───────────────────
-if getattr(sys, "frozen", False):
-    BASE_DIR = Path(sys._MEIPASS)
-    EXE_DIR = Path(sys.executable).parent
+# Nuitka/PyInstaller ビルド済みの場合は exe と同じフォルダがリソースディレクトリ
+if "__compiled__" in globals() or getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).parent
+    EXE_DIR = BASE_DIR
 else:
     BASE_DIR = Path(__file__).parent
     EXE_DIR = BASE_DIR
