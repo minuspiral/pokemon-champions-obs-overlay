@@ -662,7 +662,7 @@ class OverlayApp:
         last_my_hash_h = None
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
         items_saved = False  # アイテム保存済みフラグ
-        my_selection_locked = False  # 自分選出ロック (3体検出後は固定)
+        selection_locked = False  # 選出完了ロック (3体検出後は相手・自分とも固定)
 
         while self.running:
             try:
@@ -689,33 +689,26 @@ class OverlayApp:
                         # 選出中 (まだ3体揃っていない)
                         self.root.after(0, self.status_var.set, f"選出中... ({n_selected}/3)")
                     else:
-                        # 対戦準備中画面 → 相手+自分の切り出し
-                        self.root.after(0, self.status_var.set, "選出画面検出!")
+                        # 選出完了 (3体) → 相手+自分を切り出してロック
+                        if not selection_locked:
+                            self.root.after(0, self.status_var.set, "選出完了!")
 
-                        # 相手チーム横一列
-                        strip = extract_opponent_strip(frame)
-                        if strip is not None:
-                            h = hash(strip.tobytes()[:1024])
-                            if h != last_hash:
+                            # 相手チーム横一列
+                            strip = extract_opponent_strip(frame)
+                            if strip is not None:
                                 img_out.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(img_out), strip)
-                                last_hash = h
                                 self._log(f"相手チーム更新(横): {strip.shape[1]}x{strip.shape[0]}")
                                 self.root.after(0, self._update_preview, strip)
 
-                        # 相手チーム縦一列
-                        strip_v = extract_opponent_strip_vertical(frame)
-                        if strip_v is not None:
-                            hv = hash(strip_v.tobytes()[:1024])
-                            if hv != last_hash_v:
+                            # 相手チーム縦一列
+                            strip_v = extract_opponent_strip_vertical(frame)
+                            if strip_v is not None:
                                 img_out_v.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(img_out_v), strip_v)
-                                last_hash_v = hv
                                 self.root.after(0, self._update_opp_v_preview, strip_v)
 
-                        # 自分選出 (番号ソート + アイテム重ね)
-                        # 一度3体検出されたらロック (フレーム揺れで消えたり戻ったりを防止)
-                        if not my_selection_locked:
+                            # 自分選出 縦一列
                             my_strip = extract_my_selection_strip(
                                 frame, item_icons=saved_item_icons
                             )
@@ -725,6 +718,7 @@ class OverlayApp:
                                 self._log(f"自分選出更新(縦): {my_strip.shape[1]}x{my_strip.shape[0]}")
                                 self.root.after(0, self._update_my_preview, my_strip)
 
+                            # 自分選出 横一列
                             my_strip_h = extract_my_selection_strip_horizontal(
                                 frame, item_icons=saved_item_icons
                             )
@@ -733,14 +727,13 @@ class OverlayApp:
                                 cv2.imwrite(str(my_img_out_h), my_strip_h)
                                 self.root.after(0, self._update_my_h_preview, my_strip_h)
 
-                            # 3体検出できたらロック
-                            if my_strip is not None:
-                                my_selection_locked = True
-                                self._log("自分選出ロック (次の対戦までロック)")
+                            # ロック
+                            selection_locked = True
+                            self._log("選出ロック (次の対戦までロック)")
                 else:
                     # team_preview以外 → 次の対戦に備えてリセット
                     items_saved = False
-                    my_selection_locked = False
+                    selection_locked = False
                     s = f"{key}({score:.2f})" if key else "待機中"
                     self.root.after(0, self.status_var.set, s)
 
