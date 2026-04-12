@@ -4,6 +4,7 @@ output/
 # ビルド成果物
 build/
 dist/
+dist_onedir/
 *.spec
 
 # Python

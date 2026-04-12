@@ -146,14 +146,15 @@ pokemon-champions-obs-overlay/
 ### Norton等のアンチウイルスにブロックされる
 PyInstaller製のexeは自己展開型のため、一部のアンチウイルスソフトで誤検知されることがあります。**このツール自体は安全で、コードはすべて[このリポジトリ](https://github.com/minuspiral/pokemon-champions-obs-overlay)で確認できます**。
 
-**VirusTotal スキャン結果 (v1.3.0)**: [**2/70**](https://www.virustotal.com/gui/file/0682bd3b4fe50ae8928be2230c31d3c1fde128e4b8c59c67bba27fdad094ecb6) エンジンのみ誤検知 (PyInstaller製未署名exeとしては非常に良好)
+**対処法 (優先順):**
+1. **ZIP版を使う** (推奨) — `PokemonOverlay-onedir.zip` をダウンロード・解凍 → フォルダ内の `PokemonOverlay.exe` を起動。exe本体が3.8MBで自己展開型ではないため誤検知されにくい
+2. **Nortonの場合**: デバイスセキュリティ → 設定 → ウイルス対策 → スキャン除外 → `PokemonOverlay.exe` を追加
+3. **通知で「復元」や「信頼する」を選択**
+4. **Python版を使う**: `pip install -r requirements.txt` して `python overlay.py` で起動すれば誤検知しません
 
-**対処法:**
-1. **Nortonの場合**: デバイスセキュリティ → 設定 → ウイルス対策 → スキャン除外 → `PokemonOverlay.exe` を追加
-2. **通知で「復元」や「信頼する」を選択**
-3. **Python版を使う**: `pip install -r requirements.txt` して `python overlay.py` で起動すれば誤検知しません
-
-ビルド側の対策として v1.3.0 以降は `--noupx` オプションでUPX圧縮を無効化し、誤検知率を下げています。
+ビルド側の対策 (v1.3.0):
+- `--noupx` でUPX圧縮を無効化
+- `--onedir` 版を追加 (自己展開型廃止、exe本体3.8MB)
 
 ## ライセンス
 
