@@ -5,7 +5,14 @@ output/
 build/
 dist/
 dist_onedir/
+dist_nuitka/
 *.spec
+
+# Windows Sandbox 設定ファイル (ローカル検証用)
+*.wsb
+
+# SignPath 申請フォーム (記入内容は個人情報)
+OSSRequestForm*.xlsx
 
 # Python
 __pycache__/
