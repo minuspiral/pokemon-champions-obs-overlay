@@ -143,6 +143,17 @@ pokemon-champions-obs-overlay/
 - OBS の画像ソースのパスが `output/opponent_team.png` を正しく指しているか確認
 - 「ファイルが存在しない場合非表示」がONになっている場合、初回検出まで表示されません
 
+### Norton等のアンチウイルスにブロックされる
+PyInstaller製のexeは自己展開型のため、一部のアンチウイルスソフト(特にNorton)で誤検知されることがあります。**このツール自体は安全で、コードはすべて[このリポジトリ](https://github.com/minuspiral/pokemon-champions-obs-overlay)で確認できます**。
+
+**対処法:**
+1. **Nortonの場合**: デバイスセキュリティ → 設定 → ウイルス対策 → スキャン除外 → `PokemonOverlay.exe` を追加
+2. **通知で「復元」や「信頼する」を選択**
+3. **VirusTotalでスキャン**: [こちらからアップロード](https://www.virustotal.com/gui/home/upload)して安全を確認できます
+4. **Python版を使う**: `pip install -r requirements.txt` して `python overlay.py` で起動すれば誤検知しません
+
+ビルド側の対策として v1.3.0 以降は `--noupx` オプションでUPX圧縮を無効化し、誤検知率を下げています。
+
 ## ライセンス
 
 MIT License

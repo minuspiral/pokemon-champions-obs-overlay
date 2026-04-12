@@ -427,7 +427,7 @@ from tkinter import ttk, scrolledtext
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.1.0")
+        self.root.title("OBS Pokemon Champions Overlay v1.3.0")
         self.root.geometry("780x580")
         self.root.resizable(True, True)
 
