@@ -685,6 +685,9 @@ class OverlayApp:
                             saved_item_icons = items
                             items_saved = True
                             self._log(f"アイテムアイコン保存: {sum(1 for it in items if it is not None)}体分")
+                    elif n_selected < 3:
+                        # 選出中 (まだ3体揃っていない)
+                        self.root.after(0, self.status_var.set, f"選出中... ({n_selected}/3)")
                     else:
                         # 対戦準備中画面 → 相手+自分の切り出し
                         self.root.after(0, self.status_var.set, "選出画面検出!")
