@@ -662,6 +662,7 @@ class OverlayApp:
         last_my_hash_h = None
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
         items_saved = False  # アイテム保存済みフラグ
+        my_selection_locked = False  # 自分選出ロック (3体検出後は固定)
 
         while self.running:
             try:
@@ -710,32 +711,33 @@ class OverlayApp:
                                 self.root.after(0, self._update_opp_v_preview, strip_v)
 
                         # 自分選出 (番号ソート + アイテム重ね)
-                        my_strip = extract_my_selection_strip(
-                            frame, item_icons=saved_item_icons
-                        )
-                        if my_strip is not None:
-                            mh = hash(my_strip.tobytes()[:1024])
-                            if mh != last_my_hash:
+                        # 一度3体検出されたらロック (フレーム揺れで消えたり戻ったりを防止)
+                        if not my_selection_locked:
+                            my_strip = extract_my_selection_strip(
+                                frame, item_icons=saved_item_icons
+                            )
+                            if my_strip is not None:
                                 my_img_out.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(my_img_out), my_strip)
-                                last_my_hash = mh
                                 self._log(f"自分選出更新(縦): {my_strip.shape[1]}x{my_strip.shape[0]}")
                                 self.root.after(0, self._update_my_preview, my_strip)
 
-                        # 自分選出 横一列
-                        my_strip_h = extract_my_selection_strip_horizontal(
-                            frame, item_icons=saved_item_icons
-                        )
-                        if my_strip_h is not None:
-                            mhh = hash(my_strip_h.tobytes()[:1024])
-                            if mhh != last_my_hash_h:
+                            my_strip_h = extract_my_selection_strip_horizontal(
+                                frame, item_icons=saved_item_icons
+                            )
+                            if my_strip_h is not None:
                                 my_img_out_h.parent.mkdir(parents=True, exist_ok=True)
                                 cv2.imwrite(str(my_img_out_h), my_strip_h)
-                                last_my_hash_h = mhh
                                 self.root.after(0, self._update_my_h_preview, my_strip_h)
+
+                            # 3体検出できたらロック
+                            if my_strip is not None:
+                                my_selection_locked = True
+                                self._log("自分選出ロック (次の対戦までロック)")
                 else:
-                    # team_preview以外 → 次の対戦に備えてアイテム保存フラグをリセット
+                    # team_preview以外 → 次の対戦に備えてリセット
                     items_saved = False
+                    my_selection_locked = False
                     s = f"{key}({score:.2f})" if key else "待機中"
                     self.root.after(0, self.status_var.set, s)
 
