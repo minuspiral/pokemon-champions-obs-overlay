@@ -143,7 +143,27 @@ pokemon-champions-obs-overlay/
 - OBS の画像ソースのパスが `output/opponent_team.png` を正しく指しているか確認
 - 「ファイルが存在しない場合非表示」がONになっている場合、初回検出まで表示されません
 
-### Norton等のアンチウイルスにブロックされる
+### Norton使用時に「WinError 10054」(既存の接続はリモートホストに強制的に切断)が繰り返し出る
+
+Norton の **侵入防止システム (IPS/IDS)** が、OBS WebSocket の `get_source_screenshot` レスポンス(base64 エンコードされた大きな画像データ)を「異常な通信パターン」として誤検知し、localhost の接続を強制切断していると考えられます。
+
+**対処法 (推奨順):**
+
+1. **Nortonの IPS に PokemonOverlay.exe を除外追加** ← 最も効果的
+   - Norton → 設定 → ファイアウォール → **侵入防止** → **侵入防止の除外** → 設定 → 追加
+   - `PokemonOverlay.exe` のパスを指定
+
+2. **Smart Firewall のプログラム制御で明示的に許可**
+   - Norton → 設定 → ファイアウォール → **プログラム制御**
+   - `PokemonOverlay.exe` → アクセス「許可」
+
+3. **Auto-Protect のスキャン除外**
+   - Norton → 設定 → ウイルス対策 → スキャンとリスク → 除外
+   - PokemonOverlay.exe のフォルダを追加
+
+**切り分けテスト**: Norton の Auto-Protect を 15 分だけ停止してエラーが出なくなれば原因確定
+
+### Norton等のアンチウイルスでexe自体がブロックされる
 PyInstaller製のexeは自己展開型のため、一部のアンチウイルスソフトで誤検知されることがあります。**このツール自体は安全で、コードはすべて[このリポジトリ](https://github.com/minuspiral/pokemon-champions-obs-overlay)で確認できます**。
 
 **対処法 (優先順):**

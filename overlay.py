@@ -444,18 +444,29 @@ def extract_result_regions(frame):
 
 # ─────────────────── OBS WebSocket ───────────────────
 def obs_grab_frame(client, source_name, width=1920, height=1080):
-    """OBSソースからスクリーンショット1枚取得→OpenCV frame"""
-    resp = client.get_source_screenshot(
-        name=source_name,
-        img_format="jpg",
-        width=width, height=height,
-        quality=85,
-    )
-    img_b64 = resp.image_data
+    """OBSソースからスクリーンショット1枚取得→OpenCV frame。失敗時None。
+
+    例外が発生しても None を返してワーカーループを継続可能にする。
+    """
+    try:
+        resp = client.get_source_screenshot(
+            name=source_name,
+            img_format="jpg",
+            width=width, height=height,
+            quality=85,
+        )
+    except Exception:
+        return None
+    img_b64 = getattr(resp, "image_data", None)
+    if not img_b64:
+        return None
     if "," in img_b64:
         img_b64 = img_b64.split(",", 1)[1]
-    raw = base64.b64decode(img_b64)
-    return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    try:
+        raw = base64.b64decode(img_b64)
+        return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 # ─────────────────── GUI ───────────────────
@@ -466,7 +477,7 @@ from tkinter import ttk, scrolledtext
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.4.0")
+        self.root.title("OBS Pokemon Champions Overlay v1.4.1")
         self.root.geometry("780x580")
         self.root.resizable(True, True)
 
@@ -920,4 +931,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        err_log = EXE_DIR / "startup_error.log"
+        try:
+            with open(err_log, "w", encoding="utf-8") as f:
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror("起動エラー",
+                         f"起動時に例外が発生しました。\n\n"
+                         f"詳細: {err_log}\n\n"
+                         f"{traceback.format_exc()[:500]}")
+        except Exception:
+            pass
+        raise
