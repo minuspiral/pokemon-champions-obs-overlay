@@ -21,10 +21,21 @@ from pathlib import Path
 log = logging.getLogger("overlay")
 
 # ─────────────────── リソースパス ───────────────────
-# Nuitka/PyInstaller ビルド済みの場合は exe と同じフォルダがリソースディレクトリ
-if "__compiled__" in globals() or getattr(sys, "frozen", False):
+# Nuitka standalone: テンプレは exe と同じフォルダ
+# PyInstaller onefile: sys._MEIPASS に展開
+# PyInstaller onedir: exe と同じ or _internal サブフォルダ
+if "__compiled__" in globals():
     BASE_DIR = Path(sys.executable).parent
     EXE_DIR = BASE_DIR
+elif getattr(sys, "frozen", False):
+    _mei = getattr(sys, "_" + "MEIPASS", None)
+    if _mei:
+        BASE_DIR = Path(_mei)
+    else:
+        _exe_parent = Path(sys.executable).parent
+        _internal = _exe_parent / "_internal"
+        BASE_DIR = _internal if (_internal / "templates").exists() else _exe_parent
+    EXE_DIR = Path(sys.executable).parent
 else:
     BASE_DIR = Path(__file__).parent
     EXE_DIR = BASE_DIR
@@ -64,6 +75,10 @@ NUM_X_END = 0.188
 NUM_Y_OFFSET = 0.02
 NUM_Y_H = 0.06
 
+# リザルト画面 ROI (対戦終了後の continue_screen)
+RESULT_RANK_ROI = (0.610, 0.420, 0.720, 0.465)  # 順位バナー (集計中/XX位)
+RESULT_RATE_ROI = (0.745, 0.420, 0.875, 0.465)  # レートバナー
+
 # タイプアイコン ROI (prep layout, スプライトの右隣)
 TYPE_Y_OFFSET = 0.0105
 TYPE_Y_H = 0.0380
@@ -75,6 +90,7 @@ TYPE_RIGHT_X1 = 0.8390
 # 画面検出テンプレート
 SCREEN_TEMPLATES = [
     ("team_preview", "team_preview_header.png", (0.0, 0.08, 0.25, 0.75), 0.65),
+    ("continue_screen", "continue_button.png", (0.85, 1.0, 0.7, 1.0), 0.65),
 ]
 
 ICON_SIZE = 128   # スプライトのリサイズサイズ
@@ -404,6 +420,28 @@ def extract_my_selection_strip_horizontal(frame, icon_size=ICON_SIZE, item_icons
     return np.hstack(parts)
 
 
+def extract_result_regions(frame):
+    """リザルト画面(continue_screen)から順位/レート を切り出す。
+
+    Returns: dict {rank, rate} → 各 BGR image or None
+    """
+    if frame is None:
+        return {}
+    h, w = frame.shape[:2]
+    out = {}
+    for name, (x0, y0, x1, y1) in (
+        ('rank', RESULT_RANK_ROI),
+        ('rate', RESULT_RATE_ROI),
+    ):
+        px0, py0 = int(w * x0), int(h * y0)
+        px1, py1 = int(w * x1), int(h * y1)
+        if py1 > h or px1 > w or py0 >= py1 or px0 >= px1:
+            out[name] = None
+        else:
+            out[name] = frame[py0:py1, px0:px1].copy()
+    return out
+
+
 # ─────────────────── OBS WebSocket ───────────────────
 def obs_grab_frame(client, source_name, width=1920, height=1080):
     """OBSソースからスクリーンショット1枚取得→OpenCV frame"""
@@ -428,7 +466,7 @@ from tkinter import ttk, scrolledtext
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.3.0")
+        self.root.title("OBS Pokemon Champions Overlay v1.4.0")
         self.root.geometry("780x580")
         self.root.resizable(True, True)
 
@@ -523,6 +561,15 @@ class OverlayApp:
         ttk.Label(opp_v_frame, text="相手(縦)", font=("", 8)).pack()
         self.opp_v_preview_label = ttk.Label(opp_v_frame, text="待機中...", anchor="center")
         self.opp_v_preview_label.pack()
+        # ランク+レート (リザルト画面で更新)
+        rank_frame = ttk.Frame(preview_inner)
+        rank_frame.pack(side="left", padx=(0, 8))
+        ttk.Label(rank_frame, text="ランク", font=("", 8)).pack()
+        self.rank_preview_label = ttk.Label(rank_frame, text="---", anchor="center")
+        self.rank_preview_label.pack()
+        ttk.Label(rank_frame, text="レート", font=("", 8)).pack(pady=(4, 0))
+        self.rate_preview_label = ttk.Label(rank_frame, text="---", anchor="center")
+        self.rate_preview_label.pack()
         # 自分選出 (タテ一列)
         my_frame = ttk.Frame(preview_inner)
         my_frame.pack(side="left", padx=(0, 8))
@@ -657,10 +704,15 @@ class OverlayApp:
         img_out_v = out_dir / "opponent_team_vertical.png"
         my_img_out = out_dir / "my_selection.png"
         my_img_out_h = out_dir / "my_selection_horizontal.png"
+        result_out_paths = {
+            "rank": out_dir / "rank.png",
+            "rate": out_dir / "rate.png",
+        }
         last_hash = None
         last_hash_v = None
         last_my_hash = None
         last_my_hash_h = None
+        last_result_hash = {k: None for k in result_out_paths}
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
         items_saved = False  # アイテム保存済みフラグ
         selection_locked = False  # 選出完了ロック (3体検出後は相手・自分とも固定)
@@ -731,6 +783,24 @@ class OverlayApp:
                             # ロック
                             selection_locked = True
                             self._log("選出ロック (次の対戦までロック)")
+                elif key == "continue_screen":
+                    # リザルト画面 → 連勝数/ランク/VP を切り出し
+                    self.root.after(0, self.status_var.set, "リザルト画面!")
+                    regions = extract_result_regions(frame)
+                    for name, img in regions.items():
+                        if img is None:
+                            continue
+                        rh = hash(img.tobytes()[:1024])
+                        if rh != last_result_hash[name]:
+                            path = result_out_paths[name]
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            cv2.imwrite(str(path), img)
+                            last_result_hash[name] = rh
+                            self._log(f"リザルト更新 {name}: {img.shape[1]}x{img.shape[0]}")
+                            self.root.after(0, self._update_result_preview, name, img)
+                    # 次対戦に備えてロック解除
+                    items_saved = False
+                    selection_locked = False
                 else:
                     # team_preview以外 → 次の対戦に備えてリセット
                     items_saved = False
@@ -811,6 +881,25 @@ class OverlayApp:
             self.my_h_preview_label._tk_img = tk_img
         except ImportError:
             self.my_h_preview_label.configure(text="(Pillow未インストール)")
+
+    def _update_result_preview(self, name, img_bgr):
+        """ランク/レートをGUIにプレビュー表示"""
+        label = {"rank": self.rank_preview_label, "rate": self.rate_preview_label}.get(name)
+        if label is None:
+            return
+        try:
+            from PIL import Image as PILImage, ImageTk
+            rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            pil = PILImage.fromarray(rgb)
+            max_w = 150
+            if pil.width > max_w:
+                ratio = max_w / pil.width
+                pil = pil.resize((max_w, int(pil.height * ratio)))
+            tk_img = ImageTk.PhotoImage(pil)
+            label.configure(image=tk_img, text="")
+            label._tk_img = tk_img
+        except ImportError:
+            label.configure(text="(Pillow未インストール)")
 
     def _on_close(self):
         self.running = False
