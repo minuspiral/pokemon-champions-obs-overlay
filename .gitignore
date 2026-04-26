@@ -14,6 +14,15 @@ dist_nuitka/
 # SignPath 申請フォーム (記入内容は個人情報)
 OSSRequestForm*.xlsx
 
+# Nuitka クラッシュレポート (環境依存ログ)
+nuitka-crash-report.xml
+
+# テスト用切り出し画像/スクリプト (リリース対象外)
+test_aspect/
+
+# ユーザ設定 (個人ごとに異なる)
+config.json
+
 # Python
 __pycache__/
 *.pyc
