@@ -92,7 +92,12 @@ TYPE_RIGHT_X1 = 0.8390
 # 画面検出テンプレート
 SCREEN_TEMPLATES = [
     ("team_preview", "team_preview_header.png", (0.0, 0.08, 0.25, 0.75), 0.65),
-    ("continue_screen", "continue_button.png", (0.85, 1.0, 0.7, 1.0), 0.65),
+    # リザルト画面: カーソル位置で 緑/青 が切替わるため全パターンを登録 (どれかがマッチすれば検出)
+    ("continue_screen", "continue_button.png", (0.85, 1.0, 0.6, 1.0), 0.65),       # 緑「対戦を続ける」(カーソル右)
+    ("continue_screen", "continue_button_blue.png", (0.85, 1.0, 0.6, 1.0), 0.65),  # 青「対戦を続ける」(カーソル外)
+    ("continue_screen", "stop_button.png", (0.85, 1.0, 0.0, 0.4), 0.65),           # 青「対戦をやめる」(カーソル外)
+    ("continue_screen", "stop_button_green.png", (0.85, 1.0, 0.0, 0.4), 0.65),     # 緑「対戦をやめる」(カーソル左)
+    ("continue_screen", "team_edit_button.png", (0.85, 1.0, 0.3, 0.7), 0.65),      # 青「チームを編成する」
     # 左半分 ROI で自分側の結果を判定 (右半分は相手側)
     ("win_banner", "win_banner.png", (0.5, 0.8, 0.0, 0.5), 0.65),
     ("lose_banner", "lose_banner.png", (0.5, 0.8, 0.0, 0.5), 0.65),
@@ -753,7 +758,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.5.3")
+        self.root.title("OBS Pokemon Champions Overlay v1.5.4")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
