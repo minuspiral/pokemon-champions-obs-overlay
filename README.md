@@ -176,10 +176,6 @@ PyInstaller製のexeは自己展開型のため、一部のアンチウイルス
 - `--noupx` でUPX圧縮を無効化
 - `--onedir` 版を追加 (自己展開型廃止、exe本体3.8MB)
 
-## コード署名について
-
-このプロジェクトは [SignPath Foundation](https://signpath.org/) による無料のOSSコード署名を申請しています。承認後は signed バイナリがリリースに含まれる予定です。署名ポリシーの詳細は [CODESIGNING.md](CODESIGNING.md) を参照してください。
-
 ## ライセンス
 
 MIT License
