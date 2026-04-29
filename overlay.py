@@ -55,9 +55,17 @@ PANEL_Y_H = 0.0950
 OPP_X_START = 0.7240
 OPP_X_END = 0.7864
 
-# 自分スプライト ROI
+# 自分スプライト ROI (対戦準備中, prep layout)
 MY_X_START = 0.160
 MY_X_END = 0.250
+
+# 自分パーティ ROI (選出前画面, pokemonselection — スプライトのみ縦長)
+# X: パネル右側のスプライト領域、Y: パネルから下方に伸びる sprite を取りこぼさない高さ
+SEL_MY_X_START = 0.255
+SEL_MY_X_END = 0.320
+SEL_MY_Y_FIRST = 0.130   # パネル上端よりわずかに上 (スプライト上部の取りこぼし防止)
+SEL_MY_Y_STEP = 0.1167
+SEL_MY_Y_H = 0.118       # PANEL_Y_H(0.095)では下端が見切れる → STEP相当まで拡張
 
 # 選出判定: パネル背景色の領域 (対戦準備中画面)
 MY_BG_X_START = 0.15
@@ -510,6 +518,46 @@ def extract_my_selection_strip_horizontal(frame, icon_size=ICON_SIZE, item_icons
     return np.hstack(parts)
 
 
+def extract_my_party_strip_vertical(frame):
+    """選出前画面 (pokemonselection) から自分の6体スプライトを縦一列に切り出す (タテ長)。
+    各スプライトの右下にアイテムアイコンを重畳 (右下角合わせ)。
+    """
+    if frame is None:
+        return None
+    h, w = frame.shape[:2]
+    x0 = max(0, int(w * SEL_MY_X_START))
+    x1 = min(w, int(w * SEL_MY_X_END))
+    if x1 <= x0:
+        return None
+
+    items = extract_item_icons(frame)  # 6個 (Noneあり)
+
+    rows = []
+    for i in range(6):
+        y0 = max(0, int(h * (SEL_MY_Y_FIRST + SEL_MY_Y_STEP * i)))
+        y1 = min(h, int(h * (SEL_MY_Y_FIRST + SEL_MY_Y_STEP * i + SEL_MY_Y_H)))
+        if y1 <= y0:
+            return None
+        sprite = frame[y0:y1, x0:x1].copy()
+        sprite_h, sprite_w = sprite.shape[:2]
+        item = items[i] if i < len(items) else None
+        if item is not None:
+            item_sz = max(1, sprite_h // 3)
+            item_r = cv2.resize(item, (item_sz, item_sz), interpolation=cv2.INTER_AREA)
+            by = sprite_h - item_sz
+            bx = sprite_w - item_sz
+            sprite[by:by + item_sz, bx:bx + item_sz] = item_r
+        rows.append(sprite)
+
+    sprite_w_final = rows[0].shape[1]
+    parts = []
+    for i, r in enumerate(rows):
+        parts.append(r)
+        if i < 5:
+            parts.append(np.ones((SEP_WIDTH, sprite_w_final, 3), dtype=np.uint8) * 255)
+    return np.vstack(parts)
+
+
 def load_digit_templates(templates_dir) -> dict:
     """templates/digits/ 配下の 0.png〜9.png を読込 (日本語パス対応)。
     Returns: {digit_str: bgr_image}
@@ -758,7 +806,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.5.4")
+        self.root.title("OBS Pokemon Champions Overlay v1.5.5")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
@@ -918,14 +966,16 @@ class OverlayApp:
         f_mh, self.my_h_preview_label = _thumb_box(thumbs, "自分選出 (横一列)", w=80, h=2)
         f_mh.grid(row=1, column=0, columnspan=3, padx=4, pady=4, sticky="ew")
 
-        # Row 2: 縦プレビュー3つ (相手縦 / 自分縦 / ランク+レート)
-        f_ov, self.opp_v_preview_label = _thumb_box(thumbs, "相手(縦)", w=14, h=10)
+        # Row 2: 縦プレビュー4つ (相手縦 / 自分選出縦 / 自分パーティ縦 / ランク+レート)
+        f_ov, self.opp_v_preview_label = _thumb_box(thumbs, "相手(縦)", w=12, h=10)
         f_ov.grid(row=2, column=0, padx=4, pady=4, sticky="n")
-        f_mv, self.my_preview_label = _thumb_box(thumbs, "自分(縦)", w=14, h=10)
+        f_mv, self.my_preview_label = _thumb_box(thumbs, "自分選出(縦)", w=12, h=10)
         f_mv.grid(row=2, column=1, padx=4, pady=4, sticky="n")
+        f_mp, self.my_party_preview_label = _thumb_box(thumbs, "自分パーティ(縦,6体)", w=12, h=14)
+        f_mp.grid(row=2, column=2, padx=4, pady=4, sticky="n")
 
         rr_box = tk.Frame(thumbs, bg=T["PANEL"])
-        rr_box.grid(row=2, column=2, padx=4, pady=4, sticky="nw")
+        rr_box.grid(row=2, column=3, padx=4, pady=4, sticky="nw")
         f_rk, self.rank_preview_label = _thumb_box(rr_box, "ランク", w=22, h=2)
         f_rk.pack(fill="x", pady=(0, 6))
         f_rt, self.rate_preview_label = _thumb_box(rr_box, "レート", w=22, h=2)
@@ -933,7 +983,8 @@ class OverlayApp:
 
         thumbs.grid_columnconfigure(0, weight=1)
         thumbs.grid_columnconfigure(1, weight=1)
-        thumbs.grid_columnconfigure(2, weight=2)
+        thumbs.grid_columnconfigure(2, weight=1)
+        thumbs.grid_columnconfigure(3, weight=2)
 
         # ─── ステータスバー (下部固定) ───
         status_bar = tk.Frame(self.root, bg=T["HEADER"])
@@ -1239,6 +1290,7 @@ class OverlayApp:
                 "opp_v": d / "opponent_team_vertical.png",
                 "my_v": d / "my_selection.png",
                 "my_h": d / "my_selection_horizontal.png",
+                "my_party": d / "my_party.png",
                 "rank": d / "rank.png",
                 "rate": d / "rate.png",
             }
@@ -1375,6 +1427,13 @@ class OverlayApp:
                                 saved_item_icons = items
                                 items_saved = True
                                 self._log(f"アイテムアイコン保存: {sum(1 for it in items if it is not None)}体分 (有効{len(valid)}体)")
+                                # 自分パーティ縦 (6体) を出力 (パネル丸ごと)
+                                party_strip = extract_my_party_strip_vertical(frame)
+                                if party_strip is not None:
+                                    paths["my_party"].parent.mkdir(parents=True, exist_ok=True)
+                                    imwrite_unicode(paths["my_party"], party_strip)
+                                    self._log(f"自分パーティ更新(縦,6体): {party_strip.shape[1]}x{party_strip.shape[0]}")
+                                    self.root.after(0, self._update_my_party_preview, party_strip)
                     elif n_selected < 3:
                         # 選出中 (まだ3体揃っていない)
                         self.root.after(0, self.state_var.set, f"選出中... ({n_selected}/3)")
@@ -1541,6 +1600,10 @@ class OverlayApp:
     def _update_my_h_preview(self, strip_bgr):
         """自分選出 横一列"""
         self._show_pil_in_label(self.my_h_preview_label, strip_bgr, max_w=360)
+
+    def _update_my_party_preview(self, strip_bgr):
+        """自分パーティ 縦一列 (6体, 選出前画面)"""
+        self._show_pil_in_label(self.my_party_preview_label, strip_bgr, max_h=380)
 
     def _update_result_preview(self, name, img_bgr):
         """ランク/レート"""
