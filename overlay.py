@@ -51,9 +51,9 @@ PANEL_Y_FIRST = 0.1510
 PANEL_Y_STEP = 0.1167
 PANEL_Y_H = 0.0950
 
-# 相手スプライト ROI
+# 相手スプライト ROI (選出後 prep layout)
 OPP_X_START = 0.7240
-OPP_X_END = 0.7864
+OPP_X_END = 0.7820
 
 # 自分スプライト ROI (対戦準備中, prep layout)
 MY_X_START = 0.160
@@ -806,7 +806,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.5.5")
+        self.root.title("OBS Pokemon Champions Overlay v1.5.6")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
