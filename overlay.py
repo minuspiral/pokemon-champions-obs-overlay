@@ -226,36 +226,6 @@ class ScreenDetector:
 
 
 # ─────────────────── スプライト切り出し ───────────────────
-def _trim_red_bg(roi_bgr):
-    """赤パネル背景をトリム (上下左右の赤い帯を除去してスプライトのみにする)"""
-    hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
-    red = cv2.bitwise_or(
-        cv2.inRange(hsv, (0, 40, 40), (15, 255, 255)),
-        cv2.inRange(hsv, (160, 40, 40), (180, 255, 255)),
-    )
-    rh, rw = red.shape
-    top, bot, left, right = 0, rh, 0, rw
-    for row in range(rh):
-        if cv2.countNonZero(red[row:row+1]) / rw < 0.85:
-            top = row
-            break
-    for row in range(rh - 1, -1, -1):
-        if cv2.countNonZero(red[row:row+1]) / rw < 0.85:
-            bot = row + 1
-            break
-    for col in range(rw):
-        if cv2.countNonZero(red[:, col:col+1]) / rh < 0.85:
-            left = col
-            break
-    for col in range(rw - 1, -1, -1):
-        if cv2.countNonZero(red[:, col:col+1]) / rh < 0.85:
-            right = col + 1
-            break
-    if bot > top and right > left:
-        return roi_bgr[top:bot, left:right]
-    return roi_bgr
-
-
 def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
     """選出画面から相手6体のスプライトを切り出し、横一列に連結した画像を返す。
     各スプライトの右下にタイプアイコン2個を重ねて描画する。
@@ -278,22 +248,21 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
         resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
 
         # タイプアイコン切り出し → スプライト右下に重ねる
+        # ROI 比率は 0-1 のため境界チェック不要 (int(h*0.x) は常に < h)
         ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
         ty1 = ty0 + int(h * TYPE_Y_H)
-        if ty1 <= h:
-            lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
-            rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
-            if rx1 <= w:
-                # 各タイプを正方形 (type_size x type_size) にリサイズ (歪みなし)
-                type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
-                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
-                type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
-                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
-                # 右下端に2個横並びで配置
-                bx = icon_size - type_size * 2
-                by = icon_size - type_size
-                resized[by:by + type_size, bx:bx + type_size] = type_l
-                resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
+        lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
+        rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
+        # 各タイプを正方形 (type_size x type_size) にリサイズ (歪みなし)
+        type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
+                             (type_size, type_size), interpolation=cv2.INTER_AREA)
+        type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
+                             (type_size, type_size), interpolation=cv2.INTER_AREA)
+        # 右下端に2個横並びで配置
+        bx = icon_size - type_size * 2
+        by = icon_size - type_size
+        resized[by:by + type_size, bx:bx + type_size] = type_l
+        resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
 
         icons.append(resized)
 
@@ -323,20 +292,19 @@ def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_S
         roi = frame[y0:y1, x0:x1]
         resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
 
+        # タイプアイコン切り出し (ROI 比率 0-1 のため境界チェック不要)
         ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
         ty1 = ty0 + int(h * TYPE_Y_H)
-        if ty1 <= h:
-            lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
-            rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
-            if rx1 <= w:
-                type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
-                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
-                type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
-                                     (type_size, type_size), interpolation=cv2.INTER_AREA)
-                bx = icon_size - type_size * 2
-                by = icon_size - type_size
-                resized[by:by + type_size, bx:bx + type_size] = type_l
-                resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
+        lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
+        rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
+        type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
+                             (type_size, type_size), interpolation=cv2.INTER_AREA)
+        type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
+                             (type_size, type_size), interpolation=cv2.INTER_AREA)
+        bx = icon_size - type_size * 2
+        by = icon_size - type_size
+        resized[by:by + type_size, bx:bx + type_size] = type_l
+        resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
 
         icons.append(resized)
 
@@ -395,18 +363,17 @@ def count_selected_panels(frame):
     return count
 
 
-def detect_selection_order(frame):
-    """選出済みパネルの番号(1/2/3)をテンプレートマッチングで判定。
+# 選出順番号テンプレ (1/2/3) のキャッシュ — detect_selection_order が毎ループ呼ばれるため
+_NUM_TEMPLATES_CACHE = None
+_WARNED_NO_NUM_TEMPLATES = False
 
-    Returns: list of (slot_index, order_number, score) 番号順ソート済み
-    """
-    if frame is None:
-        return []
-    h, w = frame.shape[:2]
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # 番号テンプレート読み込み (日本語パス対応のため np.fromfile + cv2.imdecode)
-    num_templates = {}
+def _get_num_templates() -> dict:
+    """番号テンプレ (1/2/3) を遅延ロード+キャッシュ。日本語パス対応。"""
+    global _NUM_TEMPLATES_CACHE, _WARNED_NO_NUM_TEMPLATES
+    if _NUM_TEMPLATES_CACHE is not None:
+        return _NUM_TEMPLATES_CACHE
+    out = {}
     for n in [1, 2, 3]:
         path = TEMPLATES_DIR / f"num_{n}.png"
         if not path.exists():
@@ -417,7 +384,32 @@ def detect_selection_order(frame):
         except Exception:
             tmpl = None
         if tmpl is not None and tmpl.size > 0:
-            num_templates[n] = tmpl
+            out[n] = tmpl
+    _NUM_TEMPLATES_CACHE = out
+    if not out and not _WARNED_NO_NUM_TEMPLATES:
+        log.warning("番号テンプレ (num_1/2/3.png) が見つからない → 選出順は検出順フォールバック")
+        _WARNED_NO_NUM_TEMPLATES = True
+    return out
+
+
+def reset_num_templates_cache():
+    """テンプレフォルダ変更時にキャッシュ無効化するため公開。"""
+    global _NUM_TEMPLATES_CACHE, _WARNED_NO_NUM_TEMPLATES
+    _NUM_TEMPLATES_CACHE = None
+    _WARNED_NO_NUM_TEMPLATES = False
+
+
+def detect_selection_order(frame):
+    """選出済みパネルの番号(1/2/3)をテンプレートマッチングで判定。
+
+    Returns: list of (slot_index, order_number, score) 番号順ソート済み
+    """
+    if frame is None:
+        return []
+    h, w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    num_templates = _get_num_templates()
 
     results = []
     for i in range(6):
@@ -806,7 +798,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.5.6")
+        self.root.title("OBS Pokemon Champions Overlay v1.5.7")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
@@ -1044,6 +1036,8 @@ class OverlayApp:
 
     def _reload_templates(self, initial: bool = False):
         path = self.templates_var.get().strip() or str(TEMPLATES_DIR)
+        # 番号テンプレも併せてキャッシュ無効化
+        reset_num_templates_cache()
         n, missing, abs_dir = self.detector.load(path)
         # 0件 かつ 配布同梱パス以外 → バンドル既定にフォールバック (旧config.json対応)
         bundled = str(TEMPLATES_DIR)
@@ -1303,12 +1297,19 @@ class OverlayApp:
         best_result_pending = False
         last_result_hash = {"rank": None, "rate": None}
         saved_item_icons = [None] * 6  # 選出前画面で保存したアイテムアイコン
-        items_saved = False  # アイテム保存済みフラグ
+        items_saved = False  # アイテム保存済みフラグ (1回でも valid キャプチャしたか)
+        best_party_quality = -1.0  # 自分パーティ縦の最高品質 (mean+std) → より明るい/くっきりフレームで上書き
         selection_locked = False  # 選出完了ロック (3体検出後は相手・自分とも固定)
         boost_until = 0.0  # WIN/LOSE検出後の検出頻度ブースト期限
         match_counted = False  # この対戦の勝敗を既にカウント済みか
         match_flushed = False  # この対戦のリザルト(rank/rate)を既に書き出し済みか
         last_match_result = None  # 直近対戦の勝敗 ("WIN"/"LOSE") - 履歴ログ用
+        # テンプレマッチのヒステリシス: 一瞬閾値を割っても直前の key を維持
+        # (v1.5.7 で n_selected<=1 ブロックが毎ループ state_var を書くようになり、
+        #  team_preview のマッチ揺らぎで「待機中⇄選出前画面」が高頻度でチラつく問題への対処)
+        last_detected_key = None
+        miss_streak = 0
+        DEBOUNCE_MISSES = 1  # この回数までは直前の key を維持 (= 連続2回マッチなしで確定)
 
         # 数字テンプレートをロード (テンプレ参照先の digits/ サブフォルダ)
         digit_templates = load_digit_templates(self.templates_var.get().strip() or str(TEMPLATES_DIR))
@@ -1371,12 +1372,20 @@ class OverlayApp:
             best_result_pending = False
             last_match_result = None
 
+        def _reset_match_cycle():
+            """対戦サイクル境界 (continue/banner) でのリセット — 自分パーティのベスト品質と
+            選出ロックをすべて初期化。"""
+            nonlocal items_saved, best_party_quality, selection_locked
+            items_saved = False
+            best_party_quality = -1.0
+            selection_locked = False
+
         while self.running:
             try:
                 out_dir, paths = _current_paths()
                 in_boost = time.time() < boost_until
-                # ブースト期間中は短い interval で回す
-                current_interval = BOOST_INTERVAL_SEC if in_boost else interval
+                # ブースト期間中は短い interval で回す (interval が既に短ければそのまま使用)
+                current_interval = min(BOOST_INTERVAL_SEC, interval) if in_boost else interval
                 # LED更新 (ブースト中は橙、それ以外は青)
                 self.root.after(0, self.led.set_state,
                                 "boost" if in_boost else "running")
@@ -1389,7 +1398,15 @@ class OverlayApp:
                     time.sleep(current_interval)
                     continue
 
-                key, score, all_scores = self.detector.detect(frame)
+                raw_key, score, all_scores = self.detector.detect(frame)
+                # ヒステリシス: 直前の key を一定回数まで維持 (テンプレマッチ揺らぎ吸収)
+                if raw_key is None and last_detected_key is not None and miss_streak < DEBOUNCE_MISSES:
+                    miss_streak += 1
+                    key = last_detected_key
+                else:
+                    miss_streak = 0
+                    key = raw_key
+                last_detected_key = key
                 fh, fw = frame.shape[:2]
                 frame_mean = float(frame.mean())
                 frame_std = float(frame.std())
@@ -1411,29 +1428,44 @@ class OverlayApp:
                     # 選出前 vs 対戦準備中を判定
                     n_selected = count_selected_panels(frame)
 
-                    if n_selected <= 1 and not items_saved:
-                        # 選出前画面 → アイテムアイコンを保存 (1回のみ)
+                    if n_selected <= 1:
+                        # 選出前画面 → アイテムアイコン+自分パーティ縦を保存
+                        # ベストフレーム方式: 選出前画面の間は明るさ+コントラストが最大のフレームで上書き
                         # 画面遷移直後の暗い画面で取得しないよう全体輝度をチェック
                         if frame_mean < 40:
                             self.root.after(0, self.state_var.set,
                                 f"選出前画面 (描画待ち)")
                         else:
-                            self.root.after(0, self.state_var.set, "選出前画面 (アイテム取得)")
                             items = extract_item_icons(frame)
                             # 各アイテムの輝度を検証し、暗すぎる (未描画) ものは除外
                             valid = [it for it in items
                                      if it is not None and float(it.mean()) >= 30]
                             if len(valid) >= 3:
-                                saved_item_icons = items
-                                items_saved = True
-                                self._log(f"アイテムアイコン保存: {sum(1 for it in items if it is not None)}体分 (有効{len(valid)}体)")
-                                # 自分パーティ縦 (6体) を出力 (パネル丸ごと)
-                                party_strip = extract_my_party_strip_vertical(frame)
-                                if party_strip is not None:
-                                    paths["my_party"].parent.mkdir(parents=True, exist_ok=True)
-                                    imwrite_unicode(paths["my_party"], party_strip)
-                                    self._log(f"自分パーティ更新(縦,6体): {party_strip.shape[1]}x{party_strip.shape[0]}")
-                                    self.root.after(0, self._update_my_party_preview, party_strip)
+                                # 品質スコア: 自分パーティ ROI 領域のみで mean+std (上部UIに引っ張られない)
+                                ry0 = max(0, int(fh * SEL_MY_Y_FIRST))
+                                ry1 = min(fh, int(fh * (SEL_MY_Y_FIRST + SEL_MY_Y_STEP * 6)))
+                                rx0 = max(0, int(fw * SEL_MY_X_START))
+                                rx1 = min(fw, int(fw * SEL_MY_X_END))
+                                roi_party = frame[ry0:ry1, rx0:rx1]
+                                quality = float(roi_party.mean() + roi_party.std()) if roi_party.size else 0.0
+                                # ヒステリシス: 初回 or 2%以上改善時のみ書き出し (微小ノイズで頻繁にリロードしない)
+                                threshold_q = best_party_quality * 1.02 if best_party_quality > 0 else 0
+                                if quality > threshold_q:
+                                    saved_item_icons = items
+                                    items_saved = True
+                                    party_strip = extract_my_party_strip_vertical(frame)
+                                    if party_strip is not None:
+                                        paths["my_party"].parent.mkdir(parents=True, exist_ok=True)
+                                        imwrite_unicode(paths["my_party"], party_strip)
+                                        action = "更新" if best_party_quality > 0 else "保存"
+                                        self._log(f"自分パーティ{action}(縦,6体): q={quality:.1f} 有効{len(valid)}体")
+                                        self.root.after(0, self._update_my_party_preview, party_strip)
+                                    best_party_quality = quality
+                                self.root.after(0, self.state_var.set,
+                                    f"選出前画面 (q={best_party_quality:.0f})")
+                            else:
+                                self.root.after(0, self.state_var.set,
+                                    f"選出前画面 (アイテム検出待ち {len(valid)}/3)")
                     elif n_selected < 3:
                         # 選出中 (まだ3体揃っていない)
                         self.root.after(0, self.state_var.set, f"選出中... ({n_selected}/3)")
@@ -1481,8 +1513,9 @@ class OverlayApp:
                             self._log("選出ロック (次の対戦までロック)")
                 elif key == "continue_screen":
                     # リザルト画面 → 連勝数/ランク/VP を切り出して候補にためる (ベスト1枚を後で書き出し)
+                    # WIN/LOSE/DRAWバナー検出後のブースト期間のみ抽出 (誤マッチした continue_screen の取り込み防止)
                     self.root.after(0, self.state_var.set, "リザルト画面!")
-                    if not match_flushed:
+                    if in_boost and not match_flushed:
                         regions = extract_result_regions(frame)
                         for name, img in regions.items():
                             if img is None:
@@ -1501,8 +1534,7 @@ class OverlayApp:
                                 # 都度プレビュー更新 (確認用、ファイルはまだ書かない)
                                 self.root.after(0, self._update_result_preview, name, img)
                     # 次対戦に備えてロック解除
-                    items_saved = False
-                    selection_locked = False
+                    _reset_match_cycle()
                 elif key in ("win_banner", "lose_banner", "draw_banner"):
                     # 勝敗判定画面 → この後のリザルト遷移が速いのでブースト発動
                     if time.time() >= boost_until:
@@ -1529,11 +1561,10 @@ class OverlayApp:
                         self._log(f"勝敗更新: {self.win_count}勝 {self.loss_count}敗 {self.draw_count}引")
                     state_label = {"win_banner": "勝利!", "lose_banner": "敗北...", "draw_banner": "引き分け"}.get(key, key)
                     self.root.after(0, self.state_var.set, f"{state_label} (ブースト中)")
-                    items_saved = False
-                    selection_locked = False
+                    _reset_match_cycle()
                 else:
-                    # team_preview以外 → 次の対戦に備えてリセット
-                    items_saved = False
+                    # team_preview 以外: 一時的なテンプレマッチ落ちで対戦境界とは限らない
+                    # → 選出ロックだけ外し、自分パーティのベスト品質は保持 (フレーム復帰時に継続更新)
                     selection_locked = False
                     boost_suffix = " [ブースト中]" if time.time() < boost_until else ""
                     if frame_mean < 5 and frame_std < 5:
