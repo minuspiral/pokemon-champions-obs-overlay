@@ -798,7 +798,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.5.7")
+        self.root.title("OBS Pokemon Champions Overlay v1.5.8")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
@@ -1419,8 +1419,12 @@ class OverlayApp:
                     "source_name": source_name,
                 }
 
-                if key == "team_preview":
+                if key == "team_preview" and not in_boost:
                     # 新しい対戦のサイクル開始 → ベスト rank/rate を書き出し+カウントロック解除
+                    # ★ not in_boost ゲート: WIN/LOSE後の15秒ブースト中はリザルト画面が
+                    #   team_preview に誤マッチして自分パーティ抽出/勝敗二重カウントを
+                    #   起こすことがある (相手依存・再現性なし)。本物の選出はマッチング
+                    #   (数秒〜十数秒) を挟むためブースト中には出現しないので安全に無視できる。
                     if best_result_pending and not match_flushed:
                         _flush_best_results()
                     match_counted = False
