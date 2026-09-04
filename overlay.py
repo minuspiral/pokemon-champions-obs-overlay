@@ -67,6 +67,25 @@ SEL_MY_Y_FIRST = 0.130   # パネル上端よりわずかに上 (スプライト
 SEL_MY_Y_STEP = 0.1167
 SEL_MY_Y_H = 0.118       # PANEL_Y_H(0.095)では下端が見切れる → STEP相当まで拡張
 
+# 相手スプライト ROI (選出前画面, pokemonselection — 右側の赤パネル)
+# 実測 (1920x1080, 3フレーム一致): パネル上端 0.1435 / 間隔 0.1167 / 高さ 0.1046 (113px)
+# スプライト中心 X≈1670px。18体計測の結果、正方形 108x108px (x1616-1724, パネル上端+3px) を採用
+# (これ以上狭めるとガブリアス/ガオガエン等の大型が欠ける)
+SEL_OPP_X_START = 0.8417
+SEL_OPP_X_END = 0.8979
+SEL_OPP_Y_FIRST = 0.1463   # パネル上端 0.1435 + 3px
+SEL_OPP_Y_STEP = 0.1167
+SEL_OPP_Y_H = 0.1000
+
+# タイプアイコン ROI (選出前画面, 相手パネル右上。単タイプは右側のみ表示)
+# Y オフセットは SEL_OPP_Y_FIRST 基準 (パネル上端基準 0.0093 - 3px)
+SEL_TYPE_Y_OFFSET = 0.0065
+SEL_TYPE_Y_H = 0.0417
+SEL_TYPE_LEFT_X0 = 0.9115
+SEL_TYPE_LEFT_X1 = 0.9339
+SEL_TYPE_RIGHT_X0 = 0.9370
+SEL_TYPE_RIGHT_X1 = 0.9594
+
 # 選出判定: パネル背景色の領域 (対戦準備中画面)
 MY_BG_X_START = 0.15
 MY_BG_X_END = 0.20
@@ -115,7 +134,10 @@ SCREEN_TEMPLATES = [
 
 # WIN/LOSE 検出後のブースト設定 (リザルト遷移が速いので短間隔で追いかける)
 BOOST_DURATION_SEC = 15.0
-BOOST_INTERVAL_SEC = 0.3
+BOOST_INTERVAL_SEC = 0.2
+# リザルト早期確定: 順位/レートの OCR が両方数字で、この回数連続同値なら即書き出し
+# (15秒のブースト終了を待たない。終了時の書き出しは「集計中」のまま終わった場合のフォールバック)
+RESULT_STABLE_FRAMES = 3
 
 ICON_SIZE = 128   # スプライトのリサイズサイズ
 TYPE_SIZE = 24    # タイプアイコンのリサイズサイズ
@@ -226,22 +248,36 @@ class ScreenDetector:
 
 
 # ─────────────────── スプライト切り出し ───────────────────
-def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
-    """選出画面から相手6体のスプライトを切り出し、横一列に連結した画像を返す。
-    各スプライトの右下にタイプアイコン2個を重ねて描画する。
+# 相手切り出しレイアウト: (sprite_x0, sprite_x1, y_first, y_step, y_h,
+#                          type_y_off, type_y_h, tl_x0, tl_x1, tr_x0, tr_x1)
+_OPP_LAYOUTS = {
+    # 選出後 (対戦準備中) 画面
+    "prep": (OPP_X_START, OPP_X_END, PANEL_Y_FIRST, PANEL_Y_STEP, PANEL_Y_H,
+             TYPE_Y_OFFSET, TYPE_Y_H, TYPE_LEFT_X0, TYPE_LEFT_X1, TYPE_RIGHT_X0, TYPE_RIGHT_X1),
+    # 選出前 (pokemonselection) 画面 — 自分パーティ切り出しと同じタイミングで使う
+    "selection": (SEL_OPP_X_START, SEL_OPP_X_END, SEL_OPP_Y_FIRST, SEL_OPP_Y_STEP, SEL_OPP_Y_H,
+                  SEL_TYPE_Y_OFFSET, SEL_TYPE_Y_H, SEL_TYPE_LEFT_X0, SEL_TYPE_LEFT_X1,
+                  SEL_TYPE_RIGHT_X0, SEL_TYPE_RIGHT_X1),
+}
 
-    Returns: numpy array (icon_size x (icon_size*6 + sep*5), 3ch BGR) or None
+
+def _build_opponent_icons(frame, icon_size, type_size, layout):
+    """相手6体のスプライトを切り出し、右下にタイプアイコン2個を重ねた icon_size 正方形を返す。
+
+    Returns: list of 6 BGR images or None
     """
     if frame is None:
         return None
+    (sx0, sx1, y_first, y_step, y_h,
+     t_off, t_h, tl0, tl1, tr0, tr1) = _OPP_LAYOUTS[layout]
     h, w = frame.shape[:2]
     icons = []
     for i in range(6):
         # スプライト切り出し
-        y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i)))
-        y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H)))
-        x0 = max(0, int(w * OPP_X_START))
-        x1 = min(w, int(w * OPP_X_END))
+        y0 = max(0, int(h * (y_first + y_step * i)))
+        y1 = min(h, int(h * (y_first + y_step * i + y_h)))
+        x0 = max(0, int(w * sx0))
+        x1 = min(w, int(w * sx1))
         if y1 <= y0 or x1 <= x0:
             return None
         roi = frame[y0:y1, x0:x1]
@@ -249,10 +285,10 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
 
         # タイプアイコン切り出し → スプライト右下に重ねる
         # ROI 比率は 0-1 のため境界チェック不要 (int(h*0.x) は常に < h)
-        ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
-        ty1 = ty0 + int(h * TYPE_Y_H)
-        lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
-        rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
+        ty0 = int(h * (y_first + y_step * i + t_off))
+        ty1 = ty0 + int(h * t_h)
+        lx0, lx1 = int(w * tl0), int(w * tl1)
+        rx0, rx1 = int(w * tr0), int(w * tr1)
         # 各タイプを正方形 (type_size x type_size) にリサイズ (歪みなし)
         type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
                              (type_size, type_size), interpolation=cv2.INTER_AREA)
@@ -265,7 +301,19 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
         resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
 
         icons.append(resized)
+    return icons
 
+
+def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE, layout="prep"):
+    """相手6体のスプライトを切り出し、横一列に連結した画像を返す。
+    各スプライトの右下にタイプアイコン2個を重ねて描画する。
+
+    layout: "selection" (選出前画面) / "prep" (選出後の対戦準備中画面)
+    Returns: numpy array (icon_size x (icon_size*6 + sep*5), 3ch BGR) or None
+    """
+    icons = _build_opponent_icons(frame, icon_size, type_size, layout)
+    if icons is None:
+        return None
     # セパレータ(白2px)を挟んで横連結
     parts = []
     for i, icon in enumerate(icons):
@@ -276,38 +324,11 @@ def extract_opponent_strip(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
     return np.hstack(parts)
 
 
-def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE):
-    """相手6体をタテ一列に連結した画像を返す (左右反転して配信画面の左側配置向け)。"""
-    if frame is None:
+def extract_opponent_strip_vertical(frame, icon_size=ICON_SIZE, type_size=TYPE_SIZE, layout="prep"):
+    """相手6体をタテ一列に連結した画像を返す (配信画面の左側配置向け)。"""
+    icons = _build_opponent_icons(frame, icon_size, type_size, layout)
+    if icons is None:
         return None
-    h, w = frame.shape[:2]
-    icons = []
-    for i in range(6):
-        y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i)))
-        y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H)))
-        x0 = max(0, int(w * OPP_X_START))
-        x1 = min(w, int(w * OPP_X_END))
-        if y1 <= y0 or x1 <= x0:
-            return None
-        roi = frame[y0:y1, x0:x1]
-        resized = cv2.resize(roi, (icon_size, icon_size), interpolation=cv2.INTER_CUBIC)
-
-        # タイプアイコン切り出し (ROI 比率 0-1 のため境界チェック不要)
-        ty0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + TYPE_Y_OFFSET))
-        ty1 = ty0 + int(h * TYPE_Y_H)
-        lx0, lx1 = int(w * TYPE_LEFT_X0), int(w * TYPE_LEFT_X1)
-        rx0, rx1 = int(w * TYPE_RIGHT_X0), int(w * TYPE_RIGHT_X1)
-        type_l = cv2.resize(frame[ty0:ty1, lx0:lx1],
-                             (type_size, type_size), interpolation=cv2.INTER_AREA)
-        type_r = cv2.resize(frame[ty0:ty1, rx0:rx1],
-                             (type_size, type_size), interpolation=cv2.INTER_AREA)
-        bx = icon_size - type_size * 2
-        by = icon_size - type_size
-        resized[by:by + type_size, bx:bx + type_size] = type_l
-        resized[by:by + type_size, bx + type_size:bx + type_size * 2] = type_r
-
-        icons.append(resized)
-
     parts = []
     for i, icon in enumerate(icons):
         parts.append(icon)
@@ -573,9 +594,16 @@ def load_digit_templates(templates_dir) -> dict:
 
 
 def digit_ocr(bgr_crop, digit_templates: dict, target_h: int = 24,
-              score_threshold: float = 0.6) -> str:
+              score_threshold: float = 0.70, aspect_tol: float = 0.30) -> str:
     """白文字数字を切り出してテンプレートマッチで認識。
-    小さい blob はドット (.) として X 位置に挿入。kana 等ノイズはスキップ。
+    小さい blob はドット (.) として X 位置に挿入。
+
+    漢字/かな (「順位」「位」「集計中」「レート」等) を数字と誤認しないための対策:
+    - 2値マスク同士を **同サイズに正規化してから** 相関を取る (旧: BGR で細い blob を
+      テンプレ内部から探索 → 漢字の縦画が「1」として高スコアになっていた)
+    - blob とテンプレの縦横比が aspect_tol 以上ずれる数字は候補から除外
+    - 高さが中央値 ±25% から外れる blob を除外 (数字は等高)
+    - 隣接間隔が高さ×1.5 未満で連続する最長 run のみ採用 (離れたラベル片を捨てる)
     """
     if bgr_crop is None or not digit_templates:
         return ""
@@ -597,30 +625,37 @@ def digit_ocr(bgr_crop, digit_templates: dict, target_h: int = 24,
     digit_boxes.sort(key=lambda b: b[0])
     if not digit_boxes:
         return ""
-    # テンプレートを高さ揃えて正規化
+    # テンプレート → 2値マスク (前景タイトクロップ) → 高さ正規化
     norm_templates = {}
     for d, tmpl in digit_templates.items():
-        th, tw = tmpl.shape[:2]
-        new_w = max(1, int(tw * target_h / th))
-        norm_templates[d] = cv2.resize(tmpl, (new_w, target_h))
-    # 各 blob を OCR
-    digit_results = []  # (x_center, char)
+        tg = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+        _, tm = cv2.threshold(tg, 180, 255, cv2.THRESH_BINARY)
+        ys, xs = np.where(tm > 0)
+        if len(xs) == 0:
+            continue
+        tm = tm[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        th, tw = tm.shape[:2]
+        new_w = max(1, int(round(tw * target_h / th)))
+        norm_templates[d] = (
+            cv2.resize(tm, (new_w, target_h), interpolation=cv2.INTER_AREA).astype(np.float32),
+            tw / th,
+        )
+    if not norm_templates:
+        return ""
+    # 各 blob を OCR: (x_center, char, h, x, w)
+    digit_results = []
     for x, y, w, h in digit_boxes:
-        pad = 2
-        y0 = max(0, y - pad); y1 = min(bgr_crop.shape[0], y + h + pad)
-        x0 = max(0, x - pad); x1 = min(bgr_crop.shape[1], x + w + pad)
-        blob = bgr_crop[y0:y1, x0:x1]
-        bh, bw = blob.shape[:2]
-        new_bw = max(1, int(bw * target_h / bh))
-        blob_norm = cv2.resize(blob, (new_bw, target_h))
+        aspect = w / h
+        blob_mask = mask[y:y + h, x:x + w]
         best_d = None
         best_score = score_threshold
-        for d, tnorm in norm_templates.items():
+        for d, (tnorm, t_aspect) in norm_templates.items():
+            if abs(aspect - t_aspect) / t_aspect > aspect_tol:
+                continue
+            blob_norm = cv2.resize(blob_mask, (tnorm.shape[1], target_h),
+                                   interpolation=cv2.INTER_AREA).astype(np.float32)
             try:
-                if blob_norm.shape[1] >= tnorm.shape[1]:
-                    r = cv2.matchTemplate(blob_norm, tnorm, cv2.TM_CCOEFF_NORMED)
-                else:
-                    r = cv2.matchTemplate(tnorm, blob_norm, cv2.TM_CCOEFF_NORMED)
+                r = cv2.matchTemplate(blob_norm, tnorm, cv2.TM_CCOEFF_NORMED)
                 score = float(r.max())
             except Exception:
                 continue
@@ -628,13 +663,29 @@ def digit_ocr(bgr_crop, digit_templates: dict, target_h: int = 24,
                 best_score = score
                 best_d = d
         if best_d is not None:
-            digit_results.append((x + w // 2, best_d))
-    # ドットを X 位置でマージ (数字の間に挟まるドットだけ採用)
+            digit_results.append((x + w // 2, best_d, h, x, w))
     if not digit_results:
         return ""
-    min_x = digit_results[0][0]
-    max_x = digit_results[-1][0]
-    merged = list(digit_results)
+    # 高さ一貫性: 中央値 ±25% 以外を除外
+    heights = sorted(r[2] for r in digit_results)
+    med_h = heights[len(heights) // 2]
+    digit_results = [r for r in digit_results if abs(r[2] - med_h) / med_h <= 0.25]
+    if not digit_results:
+        return ""
+    # 最長の連続 run (隣接ギャップ < 高さ×1.5) のみ採用
+    runs = [[digit_results[0]]]
+    for r in digit_results[1:]:
+        prev = runs[-1][-1]
+        gap = r[3] - (prev[3] + prev[4])
+        if gap < 1.5 * med_h:
+            runs[-1].append(r)
+        else:
+            runs.append([r])
+    run = max(runs, key=len)
+    # ドットを X 位置でマージ (数字の間に挟まるドットだけ採用)
+    min_x = run[0][0]
+    max_x = run[-1][0]
+    merged = [(cx, c) for cx, c, _, _, _ in run]
     for dx in dot_xs:
         if min_x < dx < max_x:
             merged.append((dx, "."))
@@ -798,7 +849,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.5.8")
+        self.root.title("OBS Pokemon Champions Overlay v1.6.0")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
@@ -1195,11 +1246,22 @@ class OverlayApp:
         self._log("勝敗カウントをリセット")
         out_dir = Path(self.output_var.get().strip() or OUTPUT_DIR)
         self._write_score_image(out_dir / "score.png")
+        self._write_score_text(out_dir / "score.txt")
         self._update_score_label()
 
     def _update_score_label(self):
         if hasattr(self, "score_var"):
             self.score_var.set(f"{self.win_count}勝 {self.loss_count}敗 {self.draw_count}引")
+
+    def _write_score_text(self, path: Path):
+        """score.txt として「X勝 Y敗」を出力 (OBSテキストソース向け)。
+        引き分けは含めない (GUI/score.png には表示)。"""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"{self.win_count}勝 {self.loss_count}敗")
+        except Exception as e:
+            self._log(f"[!] score.txt 書き出し失敗: {e}")
 
     def _write_score_image(self, path: Path):
         """score.png として X勝Y敗 画像を出力 (透明PNG, 配信オーバーレイ向け)"""
@@ -1300,10 +1362,13 @@ class OverlayApp:
         items_saved = False  # アイテム保存済みフラグ (1回でも valid キャプチャしたか)
         best_party_quality = -1.0  # 自分パーティ縦の最高品質 (mean+std) → より明るい/くっきりフレームで上書き
         selection_locked = False  # 選出完了ロック (3体検出後は相手・自分とも固定)
+        opp_saved = False  # この対戦で相手チームを書き出し済みか (選出前画面で取得)
         boost_until = 0.0  # WIN/LOSE検出後の検出頻度ブースト期限
         match_counted = False  # この対戦の勝敗を既にカウント済みか
         match_flushed = False  # この対戦のリザルト(rank/rate)を既に書き出し済みか
         last_match_result = None  # 直近対戦の勝敗 ("WIN"/"LOSE") - 履歴ログ用
+        last_result_ocr = ("", "")  # 直前フレームの (rank, rate) OCR 結果 (早期確定の安定判定用)
+        result_stable_count = 0
         # テンプレマッチのヒステリシス: 一瞬閾値を割っても直前の key を維持
         # (v1.5.7 で n_selected<=1 ブロックが毎ループ state_var を書くようになり、
         #  team_preview のマッチ揺らぎで「待機中⇄選出前画面」が高頻度でチラつく問題への対処)
@@ -1320,7 +1385,7 @@ class OverlayApp:
 
         def _flush_best_results():
             """ためたベスト rank/rate をディスクに書き出してリセット。
-            rank.txt: 整数 / rate.txt: 整数部のみ (OBSテキストソース用)
+            rank.txt: 「NNNN位」 / rate.txt: 整数部のみ (OBSテキストソース用)
             rate_full.txt: 小数含む完全値
             battle_history.txt: 1試合1行で全データ追記
             """
@@ -1336,8 +1401,11 @@ class OverlayApp:
                     if digit_templates:
                         text = digit_ocr(img, digit_templates)
                         ocr_results[name] = text
-                        # OBSテキストソース用: rate は整数部のみ、rank は数字のみ
-                        out_text = text.split(".")[0] if name == "rate" else text
+                        # OBSテキストソース用: rate は整数部のみ、rank は「NNNN位」(未取得なら空)
+                        if name == "rate":
+                            out_text = text.split(".")[0]
+                        else:
+                            out_text = f"{text}位" if text else ""
                         txt_path = p.with_suffix(".txt")
                         try:
                             with open(txt_path, "w", encoding="utf-8") as f:
@@ -1375,10 +1443,11 @@ class OverlayApp:
         def _reset_match_cycle():
             """対戦サイクル境界 (continue/banner) でのリセット — 自分パーティのベスト品質と
             選出ロックをすべて初期化。"""
-            nonlocal items_saved, best_party_quality, selection_locked
+            nonlocal items_saved, best_party_quality, selection_locked, opp_saved
             items_saved = False
             best_party_quality = -1.0
             selection_locked = False
+            opp_saved = False
 
         while self.running:
             try:
@@ -1457,13 +1526,26 @@ class OverlayApp:
                                 if quality > threshold_q:
                                     saved_item_icons = items
                                     items_saved = True
+                                    action = "更新" if best_party_quality > 0 else "保存"
                                     party_strip = extract_my_party_strip_vertical(frame)
                                     if party_strip is not None:
                                         paths["my_party"].parent.mkdir(parents=True, exist_ok=True)
                                         imwrite_unicode(paths["my_party"], party_strip)
-                                        action = "更新" if best_party_quality > 0 else "保存"
                                         self._log(f"自分パーティ{action}(縦,6体): q={quality:.1f} 有効{len(valid)}体")
                                         self.root.after(0, self._update_my_party_preview, party_strip)
+                                    # 相手チーム (横/縦) も同じフレームから切り出す (選出前画面レイアウト)
+                                    strip = extract_opponent_strip(frame, layout="selection")
+                                    if strip is not None:
+                                        paths["opp_h"].parent.mkdir(parents=True, exist_ok=True)
+                                        imwrite_unicode(paths["opp_h"], strip)
+                                        self._log(f"相手チーム{action}(横): {strip.shape[1]}x{strip.shape[0]}")
+                                        self.root.after(0, self._update_preview, strip)
+                                        opp_saved = True
+                                    strip_v = extract_opponent_strip_vertical(frame, layout="selection")
+                                    if strip_v is not None:
+                                        paths["opp_v"].parent.mkdir(parents=True, exist_ok=True)
+                                        imwrite_unicode(paths["opp_v"], strip_v)
+                                        self.root.after(0, self._update_opp_v_preview, strip_v)
                                     best_party_quality = quality
                                 self.root.after(0, self.state_var.set,
                                     f"選出前画面 (q={best_party_quality:.0f})")
@@ -1478,20 +1560,21 @@ class OverlayApp:
                         if not selection_locked:
                             self.root.after(0, self.state_var.set, "選出完了!")
 
-                            # 相手チーム横一列
-                            strip = extract_opponent_strip(frame)
-                            if strip is not None:
-                                paths["opp_h"].parent.mkdir(parents=True, exist_ok=True)
-                                imwrite_unicode(paths["opp_h"], strip)
-                                self._log(f"相手チーム更新(横): {strip.shape[1]}x{strip.shape[0]}")
-                                self.root.after(0, self._update_preview, strip)
-
-                            # 相手チーム縦一列
-                            strip_v = extract_opponent_strip_vertical(frame)
-                            if strip_v is not None:
-                                paths["opp_v"].parent.mkdir(parents=True, exist_ok=True)
-                                imwrite_unicode(paths["opp_v"], strip_v)
-                                self.root.after(0, self._update_opp_v_preview, strip_v)
+                            # 相手チームは選出前画面で取得済みが基本。取り逃した場合 (ツールを
+                            # 選出中に起動した等) のみ、対戦準備中画面レイアウトでフォールバック
+                            if not opp_saved:
+                                strip = extract_opponent_strip(frame, layout="prep")
+                                if strip is not None:
+                                    paths["opp_h"].parent.mkdir(parents=True, exist_ok=True)
+                                    imwrite_unicode(paths["opp_h"], strip)
+                                    self._log(f"相手チーム更新(横, フォールバック): {strip.shape[1]}x{strip.shape[0]}")
+                                    self.root.after(0, self._update_preview, strip)
+                                    opp_saved = True
+                                strip_v = extract_opponent_strip_vertical(frame, layout="prep")
+                                if strip_v is not None:
+                                    paths["opp_v"].parent.mkdir(parents=True, exist_ok=True)
+                                    imwrite_unicode(paths["opp_v"], strip_v)
+                                    self.root.after(0, self._update_opp_v_preview, strip_v)
 
                             # 自分選出 縦一列
                             my_strip = extract_my_selection_strip(
@@ -1531,12 +1614,32 @@ class OverlayApp:
                                 continue
                             # スコアリング: 明るさ + コントラスト (=くっきり度) の合計
                             quality = cmean + cstd
+                            # 順位: 「集計中」表示のフレームより数字が読めたフレームを常に優先
+                            # (集計中の方が輝度/コントラストが高くベストに選ばれ、順位が空になる問題の対策)
+                            if name == "rank" and digit_templates and digit_ocr(img, digit_templates):
+                                quality += 1000.0
                             if quality > best_result[name][1]:
                                 best_result[name] = (img.copy(), quality)
                                 best_result_pending = True
                                 self._log(f"リザルト候補更新 {name}: q={quality:.1f} (mean={cmean:.0f} std={cstd:.0f})")
                                 # 都度プレビュー更新 (確認用、ファイルはまだ書かない)
                                 self.root.after(0, self._update_result_preview, name, img)
+                        # 早期確定: 順位/レートが両方読めて RESULT_STABLE_FRAMES 回連続同値なら
+                        # ブースト終了を待たずに書き出す (順位表示から約 0.6 秒で反映)
+                        if digit_templates and best_result_pending:
+                            cur_ocr = tuple(
+                                digit_ocr(regions.get(n), digit_templates) if regions.get(n) is not None else ""
+                                for n in ("rank", "rate")
+                            )
+                            if cur_ocr[0] and cur_ocr[1]:
+                                result_stable_count = result_stable_count + 1 if cur_ocr == last_result_ocr else 1
+                            else:
+                                result_stable_count = 0
+                            last_result_ocr = cur_ocr
+                            if result_stable_count >= RESULT_STABLE_FRAMES:
+                                self._log(f"リザルト安定 (順位{cur_ocr[0]}位 / レート{cur_ocr[1]}) → 早期確定")
+                                _flush_best_results()
+                                match_flushed = True
                     # 次対戦に備えてロック解除
                     _reset_match_cycle()
                 elif key in ("win_banner", "lose_banner", "draw_banner"):
@@ -1559,8 +1662,11 @@ class OverlayApp:
                         # 新対戦サイクル開始: rank/rate 書き出しフラグもリセット
                         # (team_preview検出が不安定な環境でも次対戦のリザルトを取れるように)
                         match_flushed = False
+                        last_result_ocr = ("", "")
+                        result_stable_count = 0
                         score_path = out_dir / "score.png"
                         self._write_score_image(score_path)
+                        self._write_score_text(out_dir / "score.txt")
                         self.root.after(0, self._update_score_label)
                         self._log(f"勝敗更新: {self.win_count}勝 {self.loss_count}敗 {self.draw_count}引")
                     state_label = {"win_banner": "勝利!", "lose_banner": "敗北...", "draw_banner": "引き分け"}.get(key, key)
