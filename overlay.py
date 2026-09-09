@@ -46,10 +46,17 @@ OUTPUT_DIR = EXE_DIR / "output"
 CONFIG_PATH = EXE_DIR / "config.json"
 
 # ─────────────────── 定数 ───────────────────
-# パネル共通 Y座標 (prep layout, 1920x1080 基準)
-PANEL_Y_FIRST = 0.1510
+# パネル共通 Y座標 (prep layout = 対戦準備中画面, 1920x1080 基準)
+# ★ 2026-09 のゲーム更新で準備中画面のパネルが 16px 下に移動 (上端 0.1463 → 0.1611)。
+#   固定値に依存しないよう detect_panel_y_first() で自分側パネル列から動的に検出し、
+#   検出失敗時のみ PANEL_Y_FIRST (新UIの値) にフォールバックする。
+PANEL_Y_FIRST = 0.1658          # パネル上端 0.1611 + 5px (タイトクロップ)
+PANEL_Y_FIRST_INSET = 0.0047    # 検出したパネル上端に足すオフセット (5px)
 PANEL_Y_STEP = 0.1167
 PANEL_Y_H = 0.0950
+PANEL_DETECT_X0 = 0.160         # 動的検出に使う自分側パネル内の縦帯 (番号/名前の位置、レーザー影響小)
+PANEL_DETECT_X1 = 0.190
+PANEL_PITCH_H = 0.1046          # パネル実高 (113px)。PANEL_Y_STEP との差 (13px) が暗い隙間
 
 # 相手スプライト ROI (選出後 prep layout)
 OPP_X_START = 0.7240
@@ -270,6 +277,9 @@ def _build_opponent_icons(frame, icon_size, type_size, layout):
         return None
     (sx0, sx1, y_first, y_step, y_h,
      t_off, t_h, tl0, tl1, tr0, tr1) = _OPP_LAYOUTS[layout]
+    if layout == "prep":
+        # 準備中画面は自分側と相手側のパネル行が揃っているので、自分側の検出値を流用
+        y_first = detect_panel_y_first(frame)
     h, w = frame.shape[:2]
     icons = []
     for i in range(6):
@@ -363,6 +373,55 @@ def extract_item_icons(frame):
     return items
 
 
+def detect_panel_y_first(frame) -> float:
+    """自分側パネル列 (x 0.16-0.19) から最初のパネル上端を検出し、
+    切り出し基準 Y (パネル上端 + PANEL_Y_FIRST_INSET) を比率で返す。
+
+    方式: 「パネル 6 枚 (各 PANEL_PITCH_H) + 間の暗い隙間」の櫛パターンを
+    候補 Y ごとに当てはめ、最もよく合う Y を採用する。
+    - パネル行 = 紫 (未選出) / ライム・白 (選出済) のいずれか
+    - 隙間行 = 暗い (V 中央値 < 120)
+    会場背景がパネルと似た紫でも、隙間の暗さで位置が決まるため誤らない。
+    合致度が低い (別画面等) 場合は PANEL_Y_FIRST を返す。
+    """
+    if frame is None:
+        return PANEL_Y_FIRST
+    h, w = frame.shape[:2]
+    x0, x1 = int(w * PANEL_DETECT_X0), int(w * PANEL_DETECT_X1)
+    strip = cv2.cvtColor(frame[:, x0:x1], cv2.COLOR_BGR2HSV)
+    H, S, V = strip[..., 0], strip[..., 1], strip[..., 2]
+    purple = (H > 105) & (H < 140) & (S > 80) & (V > 90)
+    lime = (H > 30) & (H < 75) & (S > 80) & (V > 150)
+    white = (S < 40) & (V > 200)
+    panel_row = ((purple | lime | white).mean(axis=1) > 0.5).astype(np.float32)
+    dark_row = (np.median(V, axis=1) < 120).astype(np.float32)
+    # 累積和で区間平均を O(1) に
+    cp = np.concatenate([[0.0], np.cumsum(panel_row)])
+    cd = np.concatenate([[0.0], np.cumsum(dark_row)])
+    step = int(round(h * PANEL_Y_STEP))
+    panel_h = int(round(h * PANEL_PITCH_H))
+    gap_h = step - panel_h
+    if gap_h <= 0:
+        return PANEL_Y_FIRST
+    best_y, best_score = None, -1.0
+    for y in range(int(h * 0.10), int(h * 0.24)):
+        score = 0.0
+        for i in range(6):
+            p0 = y + step * i
+            p1 = p0 + panel_h
+            g1 = p1 + gap_h
+            if g1 > h:
+                score = -1.0
+                break
+            score += (cp[p1] - cp[p0]) / panel_h + (cd[g1] - cd[p1]) / gap_h
+        score /= 12.0
+        if score > best_score:
+            best_score, best_y = score, y
+    if best_y is None or best_score < 0.75:
+        return PANEL_Y_FIRST
+    return best_y / h + PANEL_Y_FIRST_INSET
+
+
 def count_selected_panels(frame):
     """自分パネルの選出済み数をカウント (背景色 H<60, V>180 = 選出済み)。
 
@@ -372,10 +431,11 @@ def count_selected_panels(frame):
         return 0
     h, w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    y_first = detect_panel_y_first(frame)
     count = 0
     for i in range(6):
-        y0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i))
-        y1 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H))
+        y0 = int(h * (y_first + PANEL_Y_STEP * i))
+        y1 = int(h * (y_first + PANEL_Y_STEP * i + PANEL_Y_H))
         bg_x0 = int(w * MY_BG_X_START)
         bg_x1 = int(w * MY_BG_X_END)
         bg = hsv[y0:y1, bg_x0:bg_x1]
@@ -431,11 +491,12 @@ def detect_selection_order(frame):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
     num_templates = _get_num_templates()
+    y_first = detect_panel_y_first(frame)
 
     results = []
     for i in range(6):
-        y0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i))
-        y1 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + PANEL_Y_H))
+        y0 = int(h * (y_first + PANEL_Y_STEP * i))
+        y1 = int(h * (y_first + PANEL_Y_STEP * i + PANEL_Y_H))
 
         # 選出判定
         bg_x0 = int(w * MY_BG_X_START)
@@ -450,8 +511,8 @@ def detect_selection_order(frame):
             continue
 
         # 番号領域切り出し
-        ny0 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + NUM_Y_OFFSET))
-        ny1 = int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * i + NUM_Y_OFFSET + NUM_Y_H))
+        ny0 = int(h * (y_first + PANEL_Y_STEP * i + NUM_Y_OFFSET))
+        ny1 = int(h * (y_first + PANEL_Y_STEP * i + NUM_Y_OFFSET + NUM_Y_H))
         nx0 = int(w * NUM_X_START)
         nx1 = int(w * NUM_X_END)
         num_roi = frame[ny0:ny1, nx0:nx1]
@@ -481,11 +542,12 @@ def _build_my_selection_icons(frame, icon_size=ICON_SIZE, item_icons=None):
     ordered = detect_selection_order(frame)
     if not ordered:
         return []
+    y_first = detect_panel_y_first(frame)
 
     icons = []
     for slot_idx, order_num, score in ordered:
-        y0 = max(0, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * slot_idx)))
-        y1 = min(h, int(h * (PANEL_Y_FIRST + PANEL_Y_STEP * slot_idx + PANEL_Y_H)))
+        y0 = max(0, int(h * (y_first + PANEL_Y_STEP * slot_idx)))
+        y1 = min(h, int(h * (y_first + PANEL_Y_STEP * slot_idx + PANEL_Y_H)))
         x0 = max(0, int(w * MY_X_START))
         x1 = min(w, int(w * MY_X_END))
         if y1 <= y0 or x1 <= x0:
@@ -849,7 +911,7 @@ class CollapsibleSection(tk.Frame):
 class OverlayApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("OBS Pokemon Champions Overlay v1.6.0")
+        self.root.title("OBS Pokemon Champions Overlay v1.6.1")
         self.root.geometry("1024x720")  # プレビュー全表示の余裕を確保
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
